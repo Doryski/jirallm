@@ -1,6 +1,6 @@
 {
   "name": "jirallm",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Export Jira issues as LLM-ready context bundles — markdown, attachments, video frames",
   "type": "module",
   "main": "dist/index.js",
@@ -36,24 +36,37 @@
     "video-frames",
     "ffmpeg"
   ],
-  "author": "Dominik Rycharski (https://github.com/doryski)",
+  "author": "Dominik Rycharski (https://github.com/Doryski)",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/doryski/jirallm.git"
+    "url": "git+https://github.com/Doryski/jirallm.git"
   },
   "bugs": {
-    "url": "https://github.com/doryski/jirallm/issues"
+    "url": "https://github.com/Doryski/jirallm/issues"
   },
-  "homepage": "https://github.com/doryski/jirallm#readme",
+  "homepage": "https://github.com/Doryski/jirallm#readme",
   "engines": {
     "node": ">=20"
   },
+  "os": [
+    "darwin",
+    "linux",
+    "win32",
+    "freebsd"
+  ],
+  "cpu": [
+    "x64",
+    "arm64",
+    "arm",
+    "ia32",
+    "riscv64"
+  ],
   "dependencies": {
     "@clack/prompts": "^1.3.0",
     "@iarna/toml": "^2.2.5",
+    "@napi-rs/keyring": "^1.3.0",
     "commander": "^14.0.3",
-    "keytar": "^7.9.0",
     "pixelmatch": "^6.0.0",
     "sharp": "^0.33.5",
     "zod": "^4.4.2"
@@ -68,10 +81,5 @@
     "typescript": "^5.6.0",
     "typescript-eslint": "^8.58.2",
     "vitest": "^4.1.5"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "keytar"
-    ]
   }
 }

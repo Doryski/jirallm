@@ -62,18 +62,18 @@ async function checkFfmpeg(): Promise<CheckResult> {
 
 async function checkKeychain(): Promise<CheckResult> {
   try {
-    const mod = (await import('keytar')) as unknown;
-    if (!mod) throw new Error('keytar not loaded');
-    return { name: 'OS keychain', severity: 'pass', detail: 'keytar loaded' };
+    const mod = (await import('@napi-rs/keyring')) as { Entry?: unknown };
+    if (!mod?.Entry) throw new Error('@napi-rs/keyring not loaded');
+    return { name: 'OS keychain', severity: 'pass', detail: '@napi-rs/keyring loaded' };
   } catch (err) {
     return {
       name: 'OS keychain',
       severity: 'fail',
-      detail: 'keytar unavailable; tokens cannot be stored or read',
+      detail: '@napi-rs/keyring unavailable; tokens cannot be stored or read',
       hint:
         err instanceof Error
-          ? `${err.message}\nTry: pnpm rebuild keytar (after pnpm approve-builds)`
-          : 'Try: pnpm rebuild keytar (after pnpm approve-builds)',
+          ? `${err.message}\nTry reinstalling jirallm; ensure your platform binary is supported.`
+          : 'Try reinstalling jirallm; ensure your platform binary is supported.',
     };
   }
 }

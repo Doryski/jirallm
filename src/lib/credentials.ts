@@ -1,69 +1,78 @@
 const SERVICE = 'jirallm';
 
-type Keytar = {
-  getPassword(service: string, account: string): Promise<string | null>;
-  setPassword(service: string, account: string, password: string): Promise<void>;
-  deletePassword(service: string, account: string): Promise<boolean>;
+type Entry = {
+  getPassword(): string | null;
+  setPassword(password: string): void;
+  deletePassword(): boolean;
 };
 
-let keytarLoadPromise: Promise<Keytar | undefined> | undefined;
-let cachedKeytar: Keytar | undefined;
+type KeyringModule = {
+  Entry: new (service: string, account: string) => Entry;
+};
 
-async function loadKeytar(): Promise<Keytar | undefined> {
-  if (keytarLoadPromise) return keytarLoadPromise;
-  keytarLoadPromise = (async () => {
+let keyringLoadPromise: Promise<KeyringModule | undefined> | undefined;
+let cachedKeyring: KeyringModule | undefined;
+
+async function loadKeyring(): Promise<KeyringModule | undefined> {
+  if (keyringLoadPromise) return keyringLoadPromise;
+  keyringLoadPromise = (async () => {
     try {
-      const mod = (await import('keytar')) as { default?: Keytar } & Partial<Keytar>;
-      cachedKeytar = (mod.default ?? (mod as unknown as Keytar)) satisfies Keytar;
+      const mod = (await import('@napi-rs/keyring')) as Partial<KeyringModule> & {
+        default?: Partial<KeyringModule>;
+      };
+      const resolved = mod.Entry ? (mod as KeyringModule) : (mod.default as KeyringModule | undefined);
+      cachedKeyring = resolved && resolved.Entry ? resolved : undefined;
     } catch {
-      cachedKeytar = undefined;
+      cachedKeyring = undefined;
     }
-    return cachedKeytar;
+    return cachedKeyring;
   })();
-  return keytarLoadPromise;
+  return keyringLoadPromise;
+}
+
+function entryFor(keyring: KeyringModule, orgName: string): Entry {
+  return new keyring.Entry(SERVICE, `${orgName}:api_token`);
 }
 
 export async function getToken(orgName: string): Promise<string | undefined> {
-  const keytar = await loadKeytar();
-  if (!keytar) return undefined;
+  const keyring = await loadKeyring();
+  if (!keyring) return undefined;
   try {
-    const t = await keytar.getPassword(SERVICE, `${orgName}:api_token`);
-    return t ?? undefined;
+    return entryFor(keyring, orgName).getPassword() ?? undefined;
   } catch {
+    // NoEntry / Ambiguous → treat as missing
     return undefined;
   }
 }
 
 export async function setToken(orgName: string, token: string): Promise<void> {
-  const keytar = await loadKeytar();
-  if (!keytar) {
+  const keyring = await loadKeyring();
+  if (!keyring) {
     throw new Error(
-      'OS keychain (keytar) is unavailable. Run `pnpm rebuild keytar` after `pnpm approve-builds`.'
+      'OS keychain (@napi-rs/keyring) is unavailable. Reinstall jirallm or check that your platform binary is supported.'
     );
   }
-  await keytar.setPassword(SERVICE, `${orgName}:api_token`, token);
+  entryFor(keyring, orgName).setPassword(token);
 }
 
 export async function removeToken(orgName: string): Promise<boolean> {
-  const keytar = await loadKeytar();
-  if (!keytar) return false;
-  return keytar.deletePassword(SERVICE, `${orgName}:api_token`);
-}
-
-export async function hasStoredToken(orgName: string): Promise<boolean> {
-  const keytar = await loadKeytar();
-  if (!keytar) return false;
+  const keyring = await loadKeyring();
+  if (!keyring) return false;
   try {
-    const t = await keytar.getPassword(SERVICE, `${orgName}:api_token`);
-    return Boolean(t);
+    return entryFor(keyring, orgName).deletePassword();
   } catch {
     return false;
   }
 }
 
+export async function hasStoredToken(orgName: string): Promise<boolean> {
+  const token = await getToken(orgName);
+  return Boolean(token);
+}
+
 export const __test = {
   resetKeytarCache: () => {
-    keytarLoadPromise = undefined;
-    cachedKeytar = undefined;
+    keyringLoadPromise = undefined;
+    cachedKeyring = undefined;
   },
 };

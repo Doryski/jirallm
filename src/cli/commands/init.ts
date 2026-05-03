@@ -218,7 +218,7 @@ export async function runInit(): Promise<void> {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       note(
-        `Org saved. Token NOT stored in keychain: ${msg}\nFix the keychain (e.g. \`pnpm rebuild keytar\`) and rerun \`jirallm auth set --org ${orgName}\`.`,
+        `Org saved. Token NOT stored in keychain: ${msg}\nReinstall jirallm or check that your platform is supported, then rerun \`jirallm auth set --org ${orgName}\`.`,
         'Partial success'
       );
     }

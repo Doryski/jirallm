@@ -193,9 +193,12 @@ cat ./triage-bundle/PROJ-123/index.md | pbcopy
 
 ## Platform support
 
-- macOS — fully supported
-- Linux — fully supported
-- Windows — should work; `ffmpeg` must be on `PATH`
+Native binaries (via [`@napi-rs/keyring`](https://www.npmjs.com/package/@napi-rs/keyring)) ship prebuilt — no compile step on install.
+
+- **macOS** (arm64, x64) — fully supported. Tokens stored in macOS Keychain.
+- **Linux** (x64, arm64, arm, riscv64; glibc and musl) — fully supported. Tokens stored via Secret Service (`libsecret`); requires a running keyring daemon (e.g. `gnome-keyring` or KWallet). Headless servers without a keyring backend will fail the keychain step in `jirallm doctor`.
+- **Windows** (x64, arm64, ia32) — fully supported. Tokens stored in Windows Credential Manager. `ffmpeg` must be on `PATH` for video frame extraction.
+- **FreeBSD** (x64) — keychain works; other features untested.
 
 ## Contributing
 

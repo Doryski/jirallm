@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createRequire } from 'node:module';
 import { Command } from 'commander';
 import { select, isCancel, cancel } from '@clack/prompts';
 import { JiraExporter } from '../lib/exporter.js';
@@ -168,10 +169,13 @@ async function runExport(rawArgs: string[], flags: ExportFlags): Promise<void> {
 const program = new Command();
 program.enablePositionalOptions();
 
-program
-  .name('jirallm')
-  .description('Export Jira issues as LLM-ready context bundles')
-  .version('0.1.0');
+const pkg = createRequire(import.meta.url)('../../package.json') as {
+  name: string;
+  description: string;
+  version: string;
+};
+
+program.name(pkg.name).description(pkg.description).version(pkg.version);
 
 program
   .argument('[issue-keys...]', 'Jira issue keys, e.g. PROJ-123 or acme/PROJ-123')

@@ -4,6 +4,23 @@ All notable changes to `jirallm` are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-05-03
+
+### Changed
+
+- Replaced `keytar` with [`@napi-rs/keyring`](https://www.npmjs.com/package/@napi-rs/keyring)
+  for OS keychain access. Ships prebuilt binaries via NAPI-RS — no `node-gyp`
+  rebuild required, fixing failures on global installs (`pnpm add -g jirallm`,
+  `npm i -g jirallm`).
+- Updated `jirallm doctor` and setup hints to reflect the new backend.
+
+### Platforms
+
+- Prebuilt binaries available for macOS (arm64, x64), Linux (x64, arm64, arm,
+  riscv64; glibc and musl), Windows (x64, arm64, ia32), and FreeBSD (x64).
+- Linux still requires a Secret Service provider (`gnome-keyring`, KWallet) for
+  keychain operations.
+
 ## [0.1.0] - 2026-05-01
 
 ### Added
