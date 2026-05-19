@@ -466,6 +466,47 @@ export class JiraClient {
     }
   }
 
+  async addComment(
+    issueKey: string,
+    wikiBody: string,
+    parentCommentId?: string
+  ): Promise<{ id: string }> {
+    const url = `${this.config.baseUrl}/rest/api/2/issue/${issueKey}/comment`;
+    const payload: Record<string, unknown> = { body: wikiBody };
+    if (parentCommentId) payload.parentId = parentCommentId;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: this.authHeader,
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(
+        `Jira addComment failed: ${response.status} ${response.statusText}\n${errorText}`
+      );
+    }
+    const json = (await response.json()) as { id: string };
+    return { id: json.id };
+  }
+
+  async deleteComment(issueKey: string, commentId: string): Promise<void> {
+    const url = `${this.config.baseUrl}/rest/api/2/issue/${issueKey}/comment/${commentId}`;
+    const response = await fetch(url, {
+      method: 'DELETE',
+      headers: { Authorization: this.authHeader, Accept: 'application/json' },
+    });
+    if (!response.ok && response.status !== 204) {
+      const errorText = await response.text();
+      throw new Error(
+        `Jira deleteComment failed: ${response.status} ${response.statusText}\n${errorText}`
+      );
+    }
+  }
+
   async downloadAttachment(attachmentUrl: string, outputPath: string): Promise<void> {
     await mkdir(dirname(outputPath), { recursive: true });
 

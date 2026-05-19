@@ -10,6 +10,7 @@ import { runAuthSet, runAuthRm, runAuthList, runAuthStatus } from './commands/au
 import { runOrgsList, runOrgsRemove, runProjectRemove } from './commands/orgs.js';
 import { runDoctor } from './commands/doctor.js';
 import { runSetup } from './commands/setup.js';
+import { runComment, runDeleteComment } from './commands/comment.js';
 
 type ExportFlags = {
   org?: string;
@@ -322,6 +323,73 @@ Examples:
   $ jirallm setup --bundled
 `
   );
+
+program
+  .command('comment <issue-key>')
+  .description('Post a (possibly multi-part) comment on a Jira issue. Markdown converted to Jira wiki by default.')
+  .option('-f, --file <path>', 'Read comment body from a file')
+  .option('-t, --text <text>', 'Inline comment text (alternative to --file / stdin)')
+  .option('-o, --org <name>', 'Organization name override')
+  .option('--max-chars <n>', 'Max chars per comment chunk (default 25000)')
+  .option('--no-wiki', 'Skip markdown→wiki conversion (post body as-is)')
+  .option('--reply-to <commentId>', 'Post as reply to an existing comment (threaded)')
+  .option('--no-thread', 'When posting multiple chunks, do not chain them as replies')
+  .option('--dry-run', 'Show what would be posted without calling Jira')
+  .action(
+    async (
+      issueKey: string,
+      opts: {
+        file?: string;
+        text?: string;
+        org?: string;
+        maxChars?: string;
+        wiki?: boolean;
+        thread?: boolean;
+        replyTo?: string;
+        dryRun?: boolean;
+      }
+    ) => {
+      try {
+        await runComment(issueKey, {
+          file: opts.file,
+          text: opts.text,
+          org: opts.org,
+          maxChars: opts.maxChars,
+          noWiki: opts.wiki === false,
+          noThread: opts.thread === false,
+          replyTo: opts.replyTo,
+          dryRun: opts.dryRun,
+        });
+      } catch (err) {
+        console.error((err as Error).message);
+        process.exit(1);
+      }
+    }
+  )
+  .addHelpText(
+    'after',
+    `
+Examples:
+  $ jirallm comment CN-2505 --file ./summary.md
+  $ jirallm comment CN-2505 -t "Quick note"
+  $ cat summary.md | jirallm comment CN-2505
+  $ jirallm comment CN-2505 --file ./summary.md --dry-run
+  $ jirallm comment CN-2505 --reply-to 26215 -t "follow-up"
+`
+  );
+
+program
+  .command('comment:rm <issue-key> <comment-id>')
+  .description('Delete a comment from a Jira issue')
+  .option('-o, --org <name>', 'Organization name override')
+  .action(async (issueKey: string, commentId: string, opts: { org?: string }) => {
+    try {
+      await runDeleteComment(issueKey, commentId, opts);
+    } catch (err) {
+      console.error((err as Error).message);
+      process.exit(1);
+    }
+  });
 
 program.parseAsync(process.argv).catch((error: unknown) => {
   console.error('Unexpected error:', error);
