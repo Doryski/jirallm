@@ -11,6 +11,8 @@ import { runOrgsList, runOrgsRemove, runProjectRemove } from './commands/orgs.js
 import { runDoctor } from './commands/doctor.js';
 import { runSetup } from './commands/setup.js';
 import { runComment, runDeleteComment } from './commands/comment.js';
+import { runBoardIssues } from './commands/board.js';
+import { runTransition } from './commands/transition.js';
 
 type ExportFlags = {
   org?: string;
@@ -375,6 +377,58 @@ Examples:
   $ cat summary.md | jirallm comment CN-2505
   $ jirallm comment CN-2505 --file ./summary.md --dry-run
   $ jirallm comment CN-2505 --reply-to 26215 -t "follow-up"
+`
+  );
+
+program
+  .command('board:issues')
+  .description('List issues in a board column. Output JSON with --json for piping into other tools.')
+  .requiredOption('-b, --board <name>', 'Board name (exact match)')
+  .requiredOption('-c, --column <name>', 'Column name (exact match)')
+  .requiredOption('-o, --org <name>', 'Organization name from config')
+  .option('-P, --project <key>', 'Project key override (defaults to the org\'s configured project)')
+  .option('-a, --assignee <accountIdOrMe>', 'Filter by assignee. Use "me" for the current user.')
+  .option('--json', 'Output JSON instead of human-readable')
+  .action(async (opts: { board: string; column: string; org: string; project?: string; assignee?: string; json?: boolean }) => {
+    try {
+      await runBoardIssues(opts);
+    } catch (err) {
+      console.error((err as Error).message);
+      process.exit(1);
+    }
+  })
+  .addHelpText(
+    'after',
+    `
+Examples:
+  $ jirallm board:issues -o MyOrg -b "My Board" -c "In Review" -a me --json
+  $ jirallm board:issues -o MyOrg -b "My Board" -c "Done"
+`
+  );
+
+program
+  .command('transition <issue-key>')
+  .description('Transition a Jira issue to a target status (matches transition.to.name).')
+  .option('-t, --to <status>', 'Target status name (e.g. "In Review")')
+  .option('-o, --org <name>', 'Organization name override')
+  .option('-l, --list', 'List available transitions for the issue instead of performing one')
+  .action(async (issueKey: string, opts: { to?: string; org?: string; list?: boolean }) => {
+    try {
+      if (!opts.list && !opts.to) {
+        throw new Error('Either --to <status> or --list is required.');
+      }
+      await runTransition(issueKey, { to: opts.to ?? '', org: opts.org, list: opts.list });
+    } catch (err) {
+      console.error((err as Error).message);
+      process.exit(1);
+    }
+  })
+  .addHelpText(
+    'after',
+    `
+Examples:
+  $ jirallm transition PROJ-123 --to "In Review"
+  $ jirallm transition PROJ-123 --list
 `
   );
 

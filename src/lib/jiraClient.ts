@@ -85,6 +85,22 @@ type HistoryEntry = {
   content: string;
 };
 
+export type JiraBoard = { id: number; name: string; type: string };
+
+export type JiraBoardConfiguration = {
+  columnConfig: {
+    columns: Array<{ name: string; statuses: Array<{ id: string; self: string }> }>;
+  };
+};
+
+export type JiraTransition = {
+  id: string;
+  name: string;
+  to: { id: string; name: string };
+};
+
+export type JqlIssue = { key: string; fields: Record<string, unknown> };
+
 type SubtaskSummary = {
   key: string;
   title: string;
@@ -505,6 +521,116 @@ export class JiraClient {
         `Jira deleteComment failed: ${response.status} ${response.statusText}\n${errorText}`
       );
     }
+  }
+
+  private async makeAgileRequest<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+    const url = `${this.config.baseUrl}/rest/agile/1.0${endpoint}`;
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        Authorization: this.authHeader,
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        ...options.headers,
+      },
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(
+        `Jira Agile API request failed: ${response.status} ${response.statusText}\n${errorText}`
+      );
+    }
+    return response.json() as Promise<T>;
+  }
+
+  async findBoardByName(name: string): Promise<JiraBoard> {
+    const response = await this.makeAgileRequest<{ values: JiraBoard[] }>(
+      `/board?name=${encodeURIComponent(name)}`
+    );
+    const exact = response.values.find((b) => b.name === name);
+    if (exact) return exact;
+    if (response.values.length === 1) return response.values[0];
+    if (response.values.length === 0) {
+      throw new Error(`No board found matching "${name}".`);
+    }
+    throw new Error(
+      `Multiple boards matched "${name}": ${response.values.map((b) => b.name).join(', ')}. Use the exact name.`
+    );
+  }
+
+  async getBoardConfiguration(boardId: number): Promise<JiraBoardConfiguration> {
+    return this.makeAgileRequest(`/board/${boardId}/configuration`);
+  }
+
+  async getBoardColumnStatusIds(boardName: string, columnName: string): Promise<string[]> {
+    const board = await this.findBoardByName(boardName);
+    const config = await this.getBoardConfiguration(board.id);
+    const column = config.columnConfig.columns.find((c) => c.name === columnName);
+    if (!column) {
+      const available = config.columnConfig.columns.map((c) => c.name).join(', ');
+      throw new Error(`Column "${columnName}" not found on board "${boardName}". Available: ${available}`);
+    }
+    return column.statuses.map((s) => s.id);
+  }
+
+  async searchByJql(
+    jql: string,
+    fields: string[] = ['summary', 'status', 'assignee', 'issuetype']
+  ): Promise<JqlIssue[]> {
+    const all: JqlIssue[] = [];
+    let nextPageToken: string | undefined;
+    do {
+      const body: Record<string, unknown> = { jql, fields, maxResults: 100 };
+      if (nextPageToken) body.nextPageToken = nextPageToken;
+      const response = await this.makeRequest<{
+        issues: JqlIssue[];
+        nextPageToken?: string;
+        isLast?: boolean;
+      }>('/search/jql', { method: 'POST', body: JSON.stringify(body) });
+      all.push(...response.issues);
+      nextPageToken = response.isLast === false ? response.nextPageToken : undefined;
+    } while (nextPageToken);
+    return all;
+  }
+
+  async getIssueTransitions(issueKey: string): Promise<JiraTransition[]> {
+    const response = await this.makeRequest<{ transitions: JiraTransition[] }>(
+      `/issue/${issueKey}/transitions`
+    );
+    return response.transitions;
+  }
+
+  async transitionIssue(
+    issueKey: string,
+    targetStatus: string
+  ): Promise<Pick<JiraTransition, 'id' | 'name'>> {
+    const transitions = await this.getIssueTransitions(issueKey);
+    const match =
+      transitions.find((t) => t.to.name === targetStatus) ??
+      transitions.find((t) => t.name === targetStatus);
+    if (!match) {
+      const available = transitions.map((t) => `"${t.name}" → "${t.to.name}"`).join(', ');
+      throw new Error(
+        `No transition to "${targetStatus}" available on ${issueKey}. Available: ${available}`
+      );
+    }
+    const url = `${this.config.baseUrl}/rest/api/3/issue/${issueKey}/transitions`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: this.authHeader,
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ transition: { id: match.id } }),
+    });
+    if (!response.ok && response.status !== 204) {
+      const errorText = await response.text();
+      throw new Error(
+        `Jira transition failed: ${response.status} ${response.statusText}\n${errorText}`
+      );
+    }
+    return { name: match.name, id: match.id };
   }
 
   async downloadAttachment(attachmentUrl: string, outputPath: string): Promise<void> {
