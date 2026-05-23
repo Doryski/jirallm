@@ -176,6 +176,11 @@ export class JiraExporter {
       mkdirSync(options.outputDir, { recursive: true });
     }
 
+    const gitignorePath = join(options.outputDir, '.gitignore');
+    if (!existsSync(gitignorePath)) {
+      writeFileSync(gitignorePath, '*\n', 'utf-8');
+    }
+
     for (const key of issueKeys) {
       try {
         const taskDir = join(options.outputDir, key.toLowerCase());
