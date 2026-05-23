@@ -1,11 +1,13 @@
 import { loadProfile, findOrgsByProjectKey } from '../../lib/config.js';
 import { JiraClient } from '../../lib/jiraClient.js';
 import { parseIssueKey } from '../issueKey.js';
+import { printJson, shouldOutputJson } from '../jsonOutput.js';
 
 export type TransitionOptions = {
   to: string;
   org?: string;
   list?: boolean;
+  json?: boolean;
 };
 
 function resolveOrg(parsedOrg: string | undefined, flagOrg: string | undefined, projectKey: string): string {
@@ -29,6 +31,10 @@ export async function runTransition(issueKeyArg: string, opts: TransitionOptions
 
   if (opts.list) {
     const transitions = await client.getIssueTransitions(parsed.key);
+    if (shouldOutputJson(opts)) {
+      printJson({ issueKey: parsed.key, transitions });
+      return;
+    }
     if (transitions.length === 0) {
       console.log(`No transitions available on ${parsed.key}.`);
       return;
@@ -41,5 +47,9 @@ export async function runTransition(issueKeyArg: string, opts: TransitionOptions
   }
 
   const result = await client.transitionIssue(parsed.key, opts.to);
+  if (shouldOutputJson(opts)) {
+    printJson({ issueKey: parsed.key, transition: result, to: opts.to });
+    return;
+  }
   console.log(`✓ ${parsed.key} transitioned via "${result.name}" → "${opts.to}"`);
 }

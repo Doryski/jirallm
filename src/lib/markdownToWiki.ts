@@ -34,6 +34,8 @@ function convertInline(line: string): string {
   line = line.replace(/(^|[^_\w])_([^_\n]+)_(?=[^_\w]|$)/g, '$1_$2_');
   line = line.replace(/~~([^~\n]+)~~/g, '-$1-');
   line = line.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '[$1|$2]');
+  // \u0001 sentinel chosen because it can't occur in markdown; protects bold runs from italic-pass rewriting
+  // eslint-disable-next-line no-control-regex
   line = line.replace(/\u0001B(\d+)\u0001/g, (_m, idx: string) => `*${bolds[parseInt(idx, 10)]}*`);
   return line;
 }

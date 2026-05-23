@@ -191,6 +191,72 @@ jirallm PROJ-123 PROJ-124 --output-dir ./triage-bundle
 cat ./triage-bundle/PROJ-123/index.md | pbcopy
 ```
 
+## For agents (CLI commands)
+
+Every read command supports `--json` (and automatically switches to JSON when stdout is not a TTY), so they're safe to pipe into `jq` or feed back into an agent. Every write command supports `--dry-run`.
+
+Discovery & search:
+
+```bash
+jirallm me --org acme --json
+jirallm projects --org acme --json
+jirallm boards --org acme --project PROJ --json
+jirallm sprints 123 --org acme --state active --json
+jirallm issuetypes --org acme --project PROJ --json
+jirallm linktypes --org acme --json
+jirallm search 'assignee = currentUser() AND statusCategory != Done' --org acme --limit 25 --json
+jirallm fetch PROJ-123 --json
+jirallm transition PROJ-123 --list --json
+```
+
+Mutations (all accept `--dry-run`):
+
+```bash
+jirallm comment PROJ-123 --file ./summary.md
+jirallm transition PROJ-123 --to "In Review"
+jirallm worklog -f ./worklogs.json
+jirallm create --org acme --project PROJ --type Task --summary "Spike" --description-file ./spike.md
+jirallm edit PROJ-123 --labels a,b --priority High
+jirallm assign PROJ-123 me
+jirallm link PROJ-1 "blocks" PROJ-2 --comment "blocked by infra work"
+jirallm link:rm 10042 --org acme
+jirallm attach PROJ-123 ./screenshot.png ./recording.mp4
+jirallm attach:rm 99021 --org acme
+jirallm watchers PROJ-123 --add me
+```
+
+## Library usage
+
+The package re-exports `JiraClient` plus all the domain types so you can drive Jira directly from your own TypeScript:
+
+```ts
+import { JiraClient, loadProfile } from 'jirallm';
+
+const { config, apiToken } = await loadProfile({ org: 'acme' });
+const client = new JiraClient(config, apiToken);
+
+// Search (single page; pass nextPageToken for the next one)
+const page = await client.searchIssues('project = PROJ AND statusCategory != Done', {
+  fields: ['summary', 'status'],
+  limit: 50,
+});
+
+// Create + comment
+const created = await client.createIssue({
+  projectKey: 'PROJ',
+  issueType: 'Task',
+  summary: 'Investigate flaky test',
+  descriptionMarkdown: '**Repro**\n\n1. step\n2. step',
+});
+await client.addComment(created.key, 'Auto-filed from triage script.');
+```
+
+See `examples/` for runnable scripts:
+
+- `examples/search-my-issues.ts` — paginated JQL
+- `examples/create-bug.ts` — create + comment
+- `examples/board-snapshot.ts` — boards → sprints → issues
+
 ## Platform support
 
 Native binaries (via [`@napi-rs/keyring`](https://www.npmjs.com/package/@napi-rs/keyring)) ship prebuilt — no compile step on install.

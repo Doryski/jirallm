@@ -14,6 +14,20 @@ import { runComment, runDeleteComment } from './commands/comment.js';
 import { runBoardIssues } from './commands/board.js';
 import { runTransition } from './commands/transition.js';
 import { runWorklog } from './commands/worklog.js';
+import { runSearch } from './commands/search.js';
+import { runProjects } from './commands/projects.js';
+import { runBoards } from './commands/boards.js';
+import { runSprints } from './commands/sprints.js';
+import { runIssueTypes } from './commands/issuetypes.js';
+import { runLinkTypes } from './commands/linktypes.js';
+import { runMe } from './commands/me.js';
+import { runFetch } from './commands/fetch.js';
+import { runCreate } from './commands/create.js';
+import { runEdit } from './commands/edit.js';
+import { runAssign } from './commands/assign.js';
+import { runLink, runLinkRemove } from './commands/link.js';
+import { runAttach, runAttachRemove } from './commands/attach.js';
+import { runWatchers } from './commands/watchers.js';
 import { parseFieldsFlag, resolveFieldSet } from '../lib/exportFields.js';
 
 type ExportFlags = {
@@ -462,12 +476,13 @@ program
   .option('-t, --to <status>', 'Target status name (e.g. "In Review")')
   .option('-o, --org <name>', 'Organization name override')
   .option('-l, --list', 'List available transitions for the issue instead of performing one')
-  .action(async (issueKey: string, opts: { to?: string; org?: string; list?: boolean }) => {
+  .option('--json', 'Output JSON instead of human-readable')
+  .action(async (issueKey: string, opts: { to?: string; org?: string; list?: boolean; json?: boolean }) => {
     try {
       if (!opts.list && !opts.to) {
         throw new Error('Either --to <status> or --list is required.');
       }
-      await runTransition(issueKey, { to: opts.to ?? '', org: opts.org, list: opts.list });
+      await runTransition(issueKey, { to: opts.to ?? '', org: opts.org, list: opts.list, json: opts.json });
     } catch (err) {
       console.error((err as Error).message);
       process.exit(1);
@@ -534,7 +549,415 @@ program
       console.error((err as Error).message);
       process.exit(1);
     }
-  });
+  })
+  .addHelpText(
+    'after',
+    `
+Examples:
+  $ jirallm comment:rm PROJ-123 26215
+  $ jirallm comment:rm acme/PROJ-123 26215
+`
+  );
+
+function exitOnError(err: unknown): never {
+  console.error((err as Error).message);
+  process.exit(1);
+}
+
+program
+  .command('search <jql>')
+  .description('Search issues by JQL (single page; pass --cursor for next page).')
+  .option('-o, --org <name>', 'Organization name')
+  .option('-P, --project <key>', 'Project key override')
+  .option('--limit <n>', 'Page size (default 50)')
+  .option('--cursor <token>', 'Next page token from prior search')
+  .option('--fields <list>', 'Comma-separated Jira field IDs to include')
+  .option('--json', 'Output JSON instead of human-readable')
+  .action(async (jql: string, opts: { org?: string; project?: string; limit?: string; cursor?: string; fields?: string; json?: boolean }) => {
+    try {
+      await runSearch({ jql, ...opts });
+    } catch (err) { exitOnError(err); }
+  })
+  .addHelpText(
+    'after',
+    `
+JQL must be quoted in your shell (it usually contains spaces and shell metacharacters).
+Output JSON includes "nextPageToken" — pass it back via --cursor for the next page.
+
+Examples:
+  $ jirallm search 'assignee = currentUser() AND statusCategory != Done' -o acme --json
+  $ jirallm search 'project = PROJ AND sprint in openSprints()' -o acme --limit 25
+  $ jirallm search 'project = PROJ' -o acme --cursor eyJsYXN0SXNzdWVLZXkiOi4uLn0= --json
+  $ jirallm search 'project = PROJ' -o acme --fields summary,status,assignee --json
+`
+  );
+
+program
+  .command('projects')
+  .description('List projects accessible in an org.')
+  .requiredOption('-o, --org <name>', 'Organization name')
+  .option('--query <text>', 'Filter by name/key substring')
+  .option('--limit <n>', 'Page size')
+  .option('--start-at <n>', 'Pagination offset')
+  .option('--json', 'Output JSON instead of human-readable')
+  .action(async (opts: { org: string; query?: string; limit?: string; startAt?: string; json?: boolean }) => {
+    try { await runProjects(opts); } catch (err) { exitOnError(err); }
+  })
+  .addHelpText(
+    'after',
+    `
+Examples:
+  $ jirallm projects -o acme
+  $ jirallm projects -o acme --query docs --json
+  $ jirallm projects -o acme --limit 50 --start-at 100 --json
+`
+  );
+
+program
+  .command('boards')
+  .description('List agile boards in an org.')
+  .requiredOption('-o, --org <name>', 'Organization name')
+  .option('-P, --project <key>', 'Filter by project key')
+  .option('-t, --type <type>', 'scrum | kanban | simple')
+  .option('-n, --name <name>', 'Name substring filter')
+  .option('--limit <n>', 'Page size')
+  .option('--start-at <n>', 'Pagination offset')
+  .option('--json', 'Output JSON instead of human-readable')
+  .action(async (opts: { org: string; project?: string; type?: 'scrum' | 'kanban' | 'simple'; name?: string; limit?: string; startAt?: string; json?: boolean }) => {
+    try { await runBoards(opts); } catch (err) { exitOnError(err); }
+  })
+  .addHelpText(
+    'after',
+    `
+When --project is omitted, falls back to the org's default project.
+The board id printed here is what you pass to \`jirallm sprints <id>\`.
+
+Examples:
+  $ jirallm boards -o acme
+  $ jirallm boards -o acme -P PROJ -t scrum --json
+  $ jirallm boards -o acme -n "Team Alpha" --json
+`
+  );
+
+program
+  .command('sprints <board-id>')
+  .description('List sprints on a board.')
+  .requiredOption('-o, --org <name>', 'Organization name')
+  .option('-s, --state <state>', 'active | future | closed')
+  .option('--limit <n>', 'Page size')
+  .option('--start-at <n>', 'Pagination offset')
+  .option('--json', 'Output JSON instead of human-readable')
+  .action(async (boardId: string, opts: { org: string; state?: 'active' | 'future' | 'closed'; limit?: string; startAt?: string; json?: boolean }) => {
+    try { await runSprints({ boardId, ...opts }); } catch (err) { exitOnError(err); }
+  })
+  .addHelpText(
+    'after',
+    `
+Get board ids from \`jirallm boards --org <name>\`.
+
+Examples:
+  $ jirallm sprints 42 -o acme --state active --json
+  $ jirallm sprints 42 -o acme --state closed --limit 20
+`
+  );
+
+program
+  .command('issuetypes')
+  .description('List issue types (project-scoped if --project provided).')
+  .requiredOption('-o, --org <name>', 'Organization name')
+  .option('-P, --project <key>', 'Project key (defaults to org default)')
+  .option('--json', 'Output JSON instead of human-readable')
+  .action(async (opts: { org: string; project?: string; json?: boolean }) => {
+    try { await runIssueTypes(opts); } catch (err) { exitOnError(err); }
+  })
+  .addHelpText(
+    'after',
+    `
+Use this before \`jirallm create\` to discover the valid --type values for a project.
+
+Examples:
+  $ jirallm issuetypes -o acme --json
+  $ jirallm issuetypes -o acme -P PROJ --json
+`
+  );
+
+program
+  .command('linktypes')
+  .description('List issue link types available in an org.')
+  .requiredOption('-o, --org <name>', 'Organization name')
+  .option('--json', 'Output JSON instead of human-readable')
+  .action(async (opts: { org: string; json?: boolean }) => {
+    try { await runLinkTypes(opts); } catch (err) { exitOnError(err); }
+  })
+  .addHelpText(
+    'after',
+    `
+The "name" column is what \`jirallm link\` expects as <type> (e.g. "Blocks", "Relates").
+
+Examples:
+  $ jirallm linktypes -o acme
+  $ jirallm linktypes -o acme --json
+`
+  );
+
+program
+  .command('me')
+  .description('Show the currently authenticated Jira user.')
+  .requiredOption('-o, --org <name>', 'Organization name')
+  .option('--json', 'Output JSON instead of human-readable')
+  .action(async (opts: { org: string; json?: boolean }) => {
+    try { await runMe(opts); } catch (err) { exitOnError(err); }
+  })
+  .addHelpText(
+    'after',
+    `
+Returns the accountId — use it as --assignee for \`create\` / \`edit\` / \`assign\`,
+or pass "me" as a shorthand in commands that resolve it (\`assign\`, \`watchers\`).
+
+Examples:
+  $ jirallm me -o acme
+  $ jirallm me -o acme --json | jq -r .accountId
+`
+  );
+
+program
+  .command('fetch <issue-key>')
+  .description('Fetch a single issue as JSON or pretty text (no file output).')
+  .option('-o, --org <name>', 'Organization name override')
+  .option('--json', 'Output JSON instead of human-readable')
+  .action(async (issueKey: string, opts: { org?: string; json?: boolean }) => {
+    try { await runFetch({ issueKey, ...opts }); } catch (err) { exitOnError(err); }
+  })
+  .addHelpText(
+    'after',
+    `
+For the full export bundle (attachments, video frames, on-disk folder),
+use the default \`jirallm <key>\` command instead.
+
+Examples:
+  $ jirallm fetch PROJ-123 --json
+  $ jirallm fetch acme/PROJ-123
+  $ jirallm fetch PROJ-123 --json | jq .status
+`
+  );
+
+program
+  .command('create')
+  .description('Create a new Jira issue.')
+  .requiredOption('-o, --org <name>', 'Organization name')
+  .option('-P, --project <key>', 'Project key (defaults to org default)')
+  .requiredOption('-t, --type <type>', 'Issue type name (e.g. Task, Bug, Story)')
+  .requiredOption('-s, --summary <text>', 'Issue summary')
+  .option('-d, --description <text>', 'Description (markdown)')
+  .option('--description-file <path>', 'Read description (markdown) from a file')
+  .option('-a, --assignee <accountId>', 'Assignee accountId')
+  .option('-l, --labels <list>', 'Comma-separated labels')
+  .option('--priority <name>', 'Priority name (e.g. High)')
+  .option('--parent <key>', 'Parent issue key (for subtasks / epic children)')
+  .option('--dry-run', 'Show what would be created without calling Jira')
+  .option('--json', 'Output JSON instead of human-readable')
+  .action(async (opts: { org: string; project?: string; type: string; summary: string; description?: string; descriptionFile?: string; assignee?: string; labels?: string; priority?: string; parent?: string; dryRun?: boolean; json?: boolean }) => {
+    try {
+      await runCreate({
+        org: opts.org,
+        projectKey: opts.project,
+        type: opts.type,
+        summary: opts.summary,
+        description: opts.description,
+        descriptionFile: opts.descriptionFile,
+        assignee: opts.assignee,
+        labels: opts.labels,
+        priority: opts.priority,
+        parent: opts.parent,
+        dryRun: opts.dryRun,
+        json: opts.json,
+      });
+    } catch (err) { exitOnError(err); }
+  })
+  .addHelpText(
+    'after',
+    `
+Run \`jirallm issuetypes -o <org>\` to discover valid --type values.
+Get a user's accountId via \`jirallm me -o <org>\` (for the current user).
+--description is markdown; it gets converted to Jira wiki on the way in.
+
+Examples:
+  $ jirallm create -o acme -t Task -s "Investigate flaky test"
+  $ jirallm create -o acme -P PROJ -t Bug -s "Crash on save" --description-file ./repro.md
+  $ jirallm create -o acme -t Story -s "Spike X" -l backend,p1 --priority High
+  $ jirallm create -o acme -t Sub-task -s "Subtask of PROJ-1" --parent PROJ-1
+  $ jirallm create -o acme -t Bug -s "test" --dry-run --json
+`
+  );
+
+program
+  .command('edit <issue-key>')
+  .description('Edit fields on an existing Jira issue.')
+  .option('-o, --org <name>', 'Organization name override')
+  .option('-s, --summary <text>', 'New summary')
+  .option('-d, --description <text>', 'New description (markdown)')
+  .option('--description-file <path>', 'Read description (markdown) from a file')
+  .option('-a, --assignee <accountId>', 'Assignee accountId')
+  .option('--unassign', 'Unassign the issue (clears assignee)')
+  .option('-l, --labels <list>', 'Comma-separated labels (replaces existing)')
+  .option('--priority <name>', 'Priority name')
+  .option('--dry-run', 'Show what would change without calling Jira')
+  .option('--json', 'Output JSON instead of human-readable')
+  .action(async (issueKey: string, opts: { org?: string; summary?: string; description?: string; descriptionFile?: string; assignee?: string; unassign?: boolean; labels?: string; priority?: string; dryRun?: boolean; json?: boolean }) => {
+    try { await runEdit({ issueKey, ...opts }); } catch (err) { exitOnError(err); }
+  })
+  .addHelpText(
+    'after',
+    `
+--labels REPLACES the existing label set; there is no add/remove syntax here.
+--unassign and --assignee are mutually exclusive (use one).
+
+Examples:
+  $ jirallm edit PROJ-123 --summary "New title"
+  $ jirallm edit PROJ-123 --description-file ./updated.md
+  $ jirallm edit PROJ-123 --labels backend,p1 --priority High
+  $ jirallm edit PROJ-123 --assignee 5ac1234567890abcdef
+  $ jirallm edit PROJ-123 --unassign --dry-run --json
+`
+  );
+
+program
+  .command('assign <issue-key> <assignee>')
+  .description('Assign an issue. Use "me" for the current user, "none" to unassign.')
+  .option('-o, --org <name>', 'Organization name override')
+  .option('--dry-run', 'Show what would change without calling Jira')
+  .option('--json', 'Output JSON instead of human-readable')
+  .action(async (issueKey: string, assignee: string, opts: { org?: string; dryRun?: boolean; json?: boolean }) => {
+    try { await runAssign({ issueKey, assignee, ...opts }); } catch (err) { exitOnError(err); }
+  })
+  .addHelpText(
+    'after',
+    `
+<assignee> shortcuts: "me" (current user) or "none"/"-" (unassign).
+Any other value is treated as a Jira accountId.
+
+Examples:
+  $ jirallm assign PROJ-123 me
+  $ jirallm assign PROJ-123 none
+  $ jirallm assign PROJ-123 5ac1234567890abcdef
+  $ jirallm assign PROJ-123 me --dry-run --json
+`
+  );
+
+program
+  .command('link <inward-key> <type> <outward-key>')
+  .description('Create an issue link (e.g. `link FOO-1 "blocks" FOO-2`).')
+  .option('-c, --comment <text>', 'Add a comment when linking')
+  .option('-o, --org <name>', 'Organization name override')
+  .option('--dry-run', 'Show what would be created without calling Jira')
+  .option('--json', 'Output JSON instead of human-readable')
+  .action(async (inwardKey: string, type: string, outwardKey: string, opts: { comment?: string; org?: string; dryRun?: boolean; json?: boolean }) => {
+    try { await runLink({ inwardKey, type, outwardKey, ...opts }); } catch (err) { exitOnError(err); }
+  })
+  .addHelpText(
+    'after',
+    `
+<type> is the link-type NAME (e.g. "Blocks", "Relates", "Duplicate"), not the inward/outward label.
+Discover the available types with: \`jirallm linktypes -o <org>\`.
+--comment is markdown; it gets converted to Jira wiki.
+
+Examples:
+  $ jirallm link PROJ-1 "Blocks" PROJ-2
+  $ jirallm link PROJ-1 "Relates" PROJ-2 --comment "see also **infra rewrite**"
+  $ jirallm link PROJ-1 "Blocks" PROJ-2 --dry-run --json
+`
+  );
+
+program
+  .command('link:rm <link-id>')
+  .description('Remove an issue link by ID.')
+  .requiredOption('-o, --org <name>', 'Organization name')
+  .option('--dry-run', 'Show what would be deleted without calling Jira')
+  .option('--json', 'Output JSON instead of human-readable')
+  .action(async (linkId: string, opts: { org: string; dryRun?: boolean; json?: boolean }) => {
+    try { await runLinkRemove({ linkId, ...opts }); } catch (err) { exitOnError(err); }
+  })
+  .addHelpText(
+    'after',
+    `
+Get link IDs from the issueLinks array in \`jirallm fetch <key> --json\`.
+
+Examples:
+  $ jirallm link:rm 10042 -o acme
+  $ jirallm link:rm 10042 -o acme --dry-run --json
+`
+  );
+
+program
+  .command('attach <issue-key> [files...]')
+  .description('Upload one or more file attachments to an issue. At least one file is required.')
+  .option('-o, --org <name>', 'Organization name override')
+  .option('--dry-run', 'Show what would be uploaded without calling Jira')
+  .option('--json', 'Output JSON instead of human-readable')
+  .action(async (issueKey: string, files: string[], opts: { org?: string; dryRun?: boolean; json?: boolean }) => {
+    try {
+      if (!files || files.length === 0) throw new Error('At least one file is required.');
+      await runAttach({ issueKey, files, ...opts });
+    } catch (err) { exitOnError(err); }
+  })
+  .addHelpText(
+    'after',
+    `
+Files are uploaded sequentially; --json returns the aggregated attachments array.
+The id from the response is what \`jirallm attach:rm\` takes.
+
+Examples:
+  $ jirallm attach PROJ-123 ./screenshot.png
+  $ jirallm attach PROJ-123 ./a.png ./b.png ./recording.mp4 --json
+  $ jirallm attach PROJ-123 ./screenshot.png --dry-run
+`
+  );
+
+program
+  .command('attach:rm <attachment-id>')
+  .description('Delete an attachment by ID.')
+  .requiredOption('-o, --org <name>', 'Organization name')
+  .option('--dry-run', 'Show what would be deleted without calling Jira')
+  .option('--json', 'Output JSON instead of human-readable')
+  .action(async (attachmentId: string, opts: { org: string; dryRun?: boolean; json?: boolean }) => {
+    try { await runAttachRemove({ attachmentId, ...opts }); } catch (err) { exitOnError(err); }
+  })
+  .addHelpText(
+    'after',
+    `
+Get attachment IDs from the attachments array in \`jirallm fetch <key> --json\`.
+
+Examples:
+  $ jirallm attach:rm 99021 -o acme
+  $ jirallm attach:rm 99021 -o acme --dry-run --json
+`
+  );
+
+program
+  .command('watchers <issue-key>')
+  .description('List, add, or remove watchers on an issue.')
+  .option('-o, --org <name>', 'Organization name override')
+  .option('--add <accountId>', 'Add watcher by accountId (or "me")')
+  .option('--rm <accountId>', 'Remove watcher by accountId (or "me")')
+  .option('--dry-run', 'Show what would change without calling Jira')
+  .option('--json', 'Output JSON instead of human-readable')
+  .action(async (issueKey: string, opts: { org?: string; add?: string; rm?: string; dryRun?: boolean; json?: boolean }) => {
+    try { await runWatchers({ issueKey, ...opts }); } catch (err) { exitOnError(err); }
+  })
+  .addHelpText(
+    'after',
+    `
+With no --add/--rm, just lists current watchers.
+You can pass both --add and --rm in one call; both run before the final listing.
+Pass "me" to add/remove yourself (resolved via \`/myself\`).
+
+Examples:
+  $ jirallm watchers PROJ-123 --json
+  $ jirallm watchers PROJ-123 --add me
+  $ jirallm watchers PROJ-123 --rm 5ac1234567890abcdef
+  $ jirallm watchers PROJ-123 --add me --rm 5acOldUser --json
+`
+  );
 
 program.parseAsync(process.argv).catch((error: unknown) => {
   console.error('Unexpected error:', error);

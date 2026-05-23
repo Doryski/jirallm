@@ -1,8 +1,9 @@
 import { createWriteStream } from 'fs';
-import { mkdir } from 'fs/promises';
-import { dirname } from 'path';
+import { mkdir, readFile, stat } from 'fs/promises';
+import { basename, dirname } from 'path';
 import { pipeline } from 'stream/promises';
 import type { CustomFieldDefs } from './exportFields.js';
+import { markdownToWiki } from './markdownToWiki.js';
 
 export type JiraConfig = {
   baseUrl: string;
@@ -101,6 +102,86 @@ export type JiraTransition = {
 };
 
 export type JqlIssue = { key: string; fields: Record<string, unknown> };
+
+export type JiraSearchPage<T> = {
+  issues: T[];
+  nextPageToken?: string;
+  isLast: boolean;
+};
+
+export type JiraProject = {
+  id: string;
+  key: string;
+  name: string;
+  projectTypeKey?: string;
+  simplified?: boolean;
+  style?: string;
+  lead?: { accountId: string; displayName: string };
+};
+
+export type JiraSprint = {
+  id: number;
+  self: string;
+  state: 'active' | 'future' | 'closed' | string;
+  name: string;
+  startDate?: string;
+  endDate?: string;
+  completeDate?: string;
+  originBoardId?: number;
+  goal?: string;
+};
+
+export type JiraIssueType = {
+  id: string;
+  name: string;
+  description?: string;
+  iconUrl?: string;
+  subtask: boolean;
+  hierarchyLevel?: number;
+};
+
+export type JiraIssueLinkType = {
+  id: string;
+  name: string;
+  inward: string;
+  outward: string;
+};
+
+export type JiraPriority = {
+  id: string;
+  name: string;
+  iconUrl?: string;
+  description?: string;
+};
+
+export type JiraStatus = {
+  id: string;
+  name: string;
+  description?: string;
+  statusCategory?: { id: number; key: string; name: string; colorName?: string };
+};
+
+export type JiraWatcher = {
+  accountId: string;
+  displayName: string;
+  active?: boolean;
+};
+
+export type JiraIssueLink = {
+  id: string;
+  self?: string;
+  type: { id?: string; name: string; inward: string; outward: string };
+  inwardIssue?: { key: string };
+  outwardIssue?: { key: string };
+};
+
+export type JiraPage<T> = {
+  values: T[];
+  startAt: number;
+  maxResults: number;
+  isLast: boolean;
+  total?: number;
+};
 
 type SubtaskSummary = {
   key: string;
@@ -895,6 +976,105 @@ export class JiraClient {
     return all;
   }
 
+  async searchIssues(
+    jql: string,
+    opts: { fields?: string[]; limit?: number; nextPageToken?: string } = {}
+  ): Promise<JiraSearchPage<JqlIssue>> {
+    const body: Record<string, unknown> = {
+      jql,
+      fields: opts.fields ?? ['summary', 'status', 'assignee', 'issuetype'],
+      maxResults: opts.limit ?? 50,
+    };
+    if (opts.nextPageToken) body.nextPageToken = opts.nextPageToken;
+    const response = await this.makeRequest<{
+      issues: JqlIssue[];
+      nextPageToken?: string;
+      isLast?: boolean;
+    }>('/search/jql', { method: 'POST', body: JSON.stringify(body) });
+    return {
+      issues: response.issues,
+      nextPageToken: response.nextPageToken,
+      isLast: response.isLast !== false,
+    };
+  }
+
+  async listProjects(
+    opts: { query?: string; startAt?: number; limit?: number } = {}
+  ): Promise<JiraPage<JiraProject>> {
+    const params = new URLSearchParams();
+    if (opts.query) params.set('query', opts.query);
+    if (opts.startAt !== undefined) params.set('startAt', String(opts.startAt));
+    if (opts.limit !== undefined) params.set('maxResults', String(opts.limit));
+    const qs = params.toString();
+    return this.makeRequest<JiraPage<JiraProject>>(`/project/search${qs ? `?${qs}` : ''}`);
+  }
+
+  async listBoards(
+    opts: {
+      projectKey?: string;
+      type?: 'scrum' | 'kanban' | 'simple';
+      name?: string;
+      startAt?: number;
+      limit?: number;
+    } = {}
+  ): Promise<JiraPage<JiraBoard>> {
+    const params = new URLSearchParams();
+    if (opts.projectKey) params.set('projectKeyOrId', opts.projectKey);
+    if (opts.type) params.set('type', opts.type);
+    if (opts.name) params.set('name', opts.name);
+    if (opts.startAt !== undefined) params.set('startAt', String(opts.startAt));
+    if (opts.limit !== undefined) params.set('maxResults', String(opts.limit));
+    const qs = params.toString();
+    return this.makeAgileRequest<JiraPage<JiraBoard>>(`/board${qs ? `?${qs}` : ''}`);
+  }
+
+  async listSprints(
+    boardId: number,
+    opts: {
+      state?: 'active' | 'future' | 'closed';
+      startAt?: number;
+      limit?: number;
+    } = {}
+  ): Promise<JiraPage<JiraSprint>> {
+    const params = new URLSearchParams();
+    if (opts.state) params.set('state', opts.state);
+    if (opts.startAt !== undefined) params.set('startAt', String(opts.startAt));
+    if (opts.limit !== undefined) params.set('maxResults', String(opts.limit));
+    const qs = params.toString();
+    return this.makeAgileRequest<JiraPage<JiraSprint>>(
+      `/board/${boardId}/sprint${qs ? `?${qs}` : ''}`
+    );
+  }
+
+  async listIssueTypes(projectKey?: string): Promise<JiraIssueType[]> {
+    if (!projectKey) return this.makeRequest<JiraIssueType[]>('/issuetype');
+    const project = await this.makeRequest<{ id: string }>(`/project/${projectKey}`);
+    return this.makeRequest<JiraIssueType[]>(`/issuetype/project?projectId=${project.id}`);
+  }
+
+  async listLinkTypes(): Promise<JiraIssueLinkType[]> {
+    const response = await this.makeRequest<{ issueLinkTypes: JiraIssueLinkType[] }>(
+      '/issueLinkType'
+    );
+    return response.issueLinkTypes;
+  }
+
+  async listPriorities(): Promise<JiraPriority[]> {
+    return this.makeRequest<JiraPriority[]>('/priority');
+  }
+
+  async listStatuses(projectKey?: string): Promise<JiraStatus[]> {
+    if (!projectKey) return this.makeRequest<JiraStatus[]>('/status');
+    const statuses = await this.makeRequest<
+      Array<{ statuses: JiraStatus[] }>
+    >(`/project/${projectKey}/statuses`);
+    const seen = new Map<string, JiraStatus>();
+    for (const entry of statuses) {
+      for (const s of entry.statuses) seen.set(s.id, s);
+    }
+    return [...seen.values()];
+  }
+
   async getIssueTransitions(issueKey: string): Promise<JiraTransition[]> {
     const response = await this.makeRequest<{ transitions: JiraTransition[] }>(
       `/issue/${issueKey}/transitions`
@@ -933,6 +1113,242 @@ export class JiraClient {
       );
     }
     return { name: match.name, id: match.id };
+  }
+
+  async createIssue(input: {
+    projectKey: string;
+    issueType: string;
+    summary: string;
+    descriptionMarkdown?: string;
+    assigneeAccountId?: string;
+    labels?: string[];
+    priority?: string;
+    parentKey?: string;
+  }): Promise<{ id: string; key: string; self: string }> {
+    const fields: Record<string, unknown> = {
+      project: { key: input.projectKey },
+      issuetype: { name: input.issueType },
+      summary: input.summary,
+    };
+    if (input.descriptionMarkdown !== undefined) {
+      fields.description = markdownToWiki(input.descriptionMarkdown);
+    }
+    if (input.assigneeAccountId) fields.assignee = { accountId: input.assigneeAccountId };
+    if (input.labels) fields.labels = input.labels;
+    if (input.priority) fields.priority = { name: input.priority };
+    if (input.parentKey) fields.parent = { key: input.parentKey };
+
+    const url = `${this.config.baseUrl}/rest/api/2/issue`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: this.authHeader,
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ fields }),
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(
+        `Jira createIssue failed: ${response.status} ${response.statusText}\n${errorText}`
+      );
+    }
+    return response.json() as Promise<{ id: string; key: string; self: string }>;
+  }
+
+  async editIssue(
+    issueKey: string,
+    input: {
+      summary?: string;
+      descriptionMarkdown?: string;
+      assigneeAccountId?: string | null;
+      labels?: string[];
+      priority?: string;
+    }
+  ): Promise<void> {
+    const fields: Record<string, unknown> = {};
+    if (input.summary !== undefined) fields.summary = input.summary;
+    if (input.descriptionMarkdown !== undefined) {
+      fields.description = markdownToWiki(input.descriptionMarkdown);
+    }
+    if (input.assigneeAccountId !== undefined) {
+      fields.assignee = input.assigneeAccountId === null
+        ? null
+        : { accountId: input.assigneeAccountId };
+    }
+    if (input.labels !== undefined) fields.labels = input.labels;
+    if (input.priority !== undefined) fields.priority = { name: input.priority };
+
+    if (Object.keys(fields).length === 0) {
+      throw new Error('editIssue called with no fields to update.');
+    }
+
+    const url = `${this.config.baseUrl}/rest/api/2/issue/${issueKey}`;
+    const response = await fetch(url, {
+      method: 'PUT',
+      headers: {
+        Authorization: this.authHeader,
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ fields }),
+    });
+    if (!response.ok && response.status !== 204) {
+      const errorText = await response.text();
+      throw new Error(
+        `Jira editIssue failed: ${response.status} ${response.statusText}\n${errorText}`
+      );
+    }
+  }
+
+  async assignIssue(issueKey: string, accountIdOrNull: string | null): Promise<void> {
+    const url = `${this.config.baseUrl}/rest/api/3/issue/${issueKey}/assignee`;
+    const response = await fetch(url, {
+      method: 'PUT',
+      headers: {
+        Authorization: this.authHeader,
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ accountId: accountIdOrNull }),
+    });
+    if (!response.ok && response.status !== 204) {
+      const errorText = await response.text();
+      throw new Error(
+        `Jira assignIssue failed: ${response.status} ${response.statusText}\n${errorText}`
+      );
+    }
+  }
+
+  async linkIssues(
+    inwardKey: string,
+    outwardKey: string,
+    linkTypeName: string,
+    comment?: string
+  ): Promise<void> {
+    const payload: Record<string, unknown> = {
+      type: { name: linkTypeName },
+      inwardIssue: { key: inwardKey },
+      outwardIssue: { key: outwardKey },
+    };
+    if (comment) payload.comment = { body: markdownToWiki(comment) };
+    const url = `${this.config.baseUrl}/rest/api/3/issueLink`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: this.authHeader,
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok && response.status !== 201) {
+      const errorText = await response.text();
+      throw new Error(
+        `Jira linkIssues failed: ${response.status} ${response.statusText}\n${errorText}`
+      );
+    }
+  }
+
+  async removeIssueLink(linkId: string): Promise<void> {
+    const url = `${this.config.baseUrl}/rest/api/3/issueLink/${linkId}`;
+    const response = await fetch(url, {
+      method: 'DELETE',
+      headers: { Authorization: this.authHeader, Accept: 'application/json' },
+    });
+    if (!response.ok && response.status !== 204) {
+      const errorText = await response.text();
+      throw new Error(
+        `Jira removeIssueLink failed: ${response.status} ${response.statusText}\n${errorText}`
+      );
+    }
+  }
+
+  async listWatchers(issueKey: string): Promise<JiraWatcher[]> {
+    const response = await this.makeRequest<{ watchers: JiraWatcher[] }>(
+      `/issue/${issueKey}/watchers`
+    );
+    return response.watchers;
+  }
+
+  async addWatcher(issueKey: string, accountId: string): Promise<void> {
+    const url = `${this.config.baseUrl}/rest/api/3/issue/${issueKey}/watchers`;
+    // Jira quirk: body is a JSON string (account id in quotes), not an object
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: this.authHeader,
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(accountId),
+    });
+    if (!response.ok && response.status !== 204) {
+      const errorText = await response.text();
+      throw new Error(
+        `Jira addWatcher failed: ${response.status} ${response.statusText}\n${errorText}`
+      );
+    }
+  }
+
+  async removeWatcher(issueKey: string, accountId: string): Promise<void> {
+    const url = `${this.config.baseUrl}/rest/api/3/issue/${issueKey}/watchers?accountId=${encodeURIComponent(accountId)}`;
+    const response = await fetch(url, {
+      method: 'DELETE',
+      headers: { Authorization: this.authHeader, Accept: 'application/json' },
+    });
+    if (!response.ok && response.status !== 204) {
+      const errorText = await response.text();
+      throw new Error(
+        `Jira removeWatcher failed: ${response.status} ${response.statusText}\n${errorText}`
+      );
+    }
+  }
+
+  async uploadAttachment(
+    issueKey: string,
+    filePath: string
+  ): Promise<Array<{ id: string; filename: string; size: number; mimeType?: string }>> {
+    await stat(filePath);
+    const buf = await readFile(filePath);
+    const form = new FormData();
+    const arr = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+    form.append('file', new Blob([arr]), basename(filePath));
+
+    const url = `${this.config.baseUrl}/rest/api/3/issue/${issueKey}/attachments`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: this.authHeader,
+        Accept: 'application/json',
+        'X-Atlassian-Token': 'no-check',
+      },
+      body: form,
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(
+        `Jira uploadAttachment failed: ${response.status} ${response.statusText}\n${errorText}`
+      );
+    }
+    return response.json() as Promise<
+      Array<{ id: string; filename: string; size: number; mimeType?: string }>
+    >;
+  }
+
+  async deleteAttachment(attachmentId: string): Promise<void> {
+    const url = `${this.config.baseUrl}/rest/api/3/attachment/${attachmentId}`;
+    const response = await fetch(url, {
+      method: 'DELETE',
+      headers: { Authorization: this.authHeader, Accept: 'application/json' },
+    });
+    if (!response.ok && response.status !== 204) {
+      const errorText = await response.text();
+      throw new Error(
+        `Jira deleteAttachment failed: ${response.status} ${response.statusText}\n${errorText}`
+      );
+    }
   }
 
   async downloadAttachment(attachmentUrl: string, outputPath: string): Promise<void> {
