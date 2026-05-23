@@ -23,9 +23,11 @@ export type ExportOptions = {
   };
 };
 
+export type ExportedItem = { key: string; path: string };
+
 export type ExportResult = {
-  imported: string[];
-  updated: string[];
+  imported: ExportedItem[];
+  updated: ExportedItem[];
   failed: Array<{ key: string; error: string }>;
 };
 
@@ -330,7 +332,8 @@ export class JiraExporter {
         const taskDir = join(options.outputDir, key.toLowerCase());
         const existed = existsSync(taskDir);
         await this.exportIssue(key, options);
-        (existed ? result.updated : result.imported).push(key);
+        const taskMdPath = join(taskDir, 'task.md');
+        (existed ? result.updated : result.imported).push({ key, path: taskMdPath });
       } catch (error) {
         result.failed.push({
           key,

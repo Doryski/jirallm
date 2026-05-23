@@ -192,10 +192,12 @@ async function runExport(rawArgs: string[], flags: ExportFlags): Promise<void> {
 
   console.log('\nExport summary:');
   if (result.imported.length > 0) {
-    console.log(`  Imported (${result.imported.length}): ${result.imported.join(', ')}`);
+    console.log(`  Imported (${result.imported.length}):`);
+    for (const { key, path } of result.imported) console.log(`    - ${key}: ${path}`);
   }
   if (result.updated.length > 0) {
-    console.log(`  Updated (${result.updated.length}): ${result.updated.join(', ')}`);
+    console.log(`  Updated (${result.updated.length}):`);
+    for (const { key, path } of result.updated) console.log(`    - ${key}: ${path}`);
   }
   if (result.failed.length > 0) {
     console.log(`  Failed (${result.failed.length}):`);
