@@ -23,12 +23,31 @@ export type ExportOptions = {
   };
 };
 
-export type ExportedItem = { key: string; path: string };
+export type VideoExtractionInfo = {
+  filename: string;
+  frameCount: number;
+  dedupedCount: number;
+  error?: string;
+};
+
+export type ExportedItem = {
+  key: string;
+  path: string;
+  attachmentCount: number;
+  videos: VideoExtractionInfo[];
+};
 
 export type ExportResult = {
   imported: ExportedItem[];
   updated: ExportedItem[];
   failed: Array<{ key: string; error: string }>;
+};
+
+type ExportIssueOutcome = {
+  taskDir: string;
+  taskMdPath: string;
+  attachmentCount: number;
+  videos: VideoExtractionInfo[];
 };
 
 const DEFAULT_VIDEO_OPTS = {
@@ -133,7 +152,7 @@ function serializeYamlObjectInline(obj: unknown, indent: string): string {
   return out;
 }
 
-function buildJiraFrontmatterBlock(task: JiraTaskData, selectedKeys: Set<string>): string {
+function buildFrontmatterBlock(task: JiraTaskData, selectedKeys: Set<string>): string {
   const pickIfSelected = <T,>(key: string, val: T | undefined): T | undefined =>
     selectedKeys.has(key) && !isEmpty(val) ? val : undefined;
 
@@ -198,8 +217,8 @@ function buildJiraFrontmatterBlock(task: JiraTaskData, selectedKeys: Set<string>
     jira.customFields = task.customFields;
   }
 
-  const body = serializeYamlValue(jira, '  ');
-  return `jira:${body}`;
+  const body = serializeYamlValue(jira, '');
+  return body.startsWith('\n') ? body.slice(1) : body;
 }
 
 function buildTaskMarkdown(
@@ -207,7 +226,7 @@ function buildTaskMarkdown(
   taskDir: string,
   selectedKeys: Set<string>
 ): string {
-  const frontmatterBody = buildJiraFrontmatterBlock(task, selectedKeys);
+  const frontmatterBody = buildFrontmatterBlock(task, selectedKeys);
   let md = `---\n${frontmatterBody}\n---\n\n# ${task.title}\n\n`;
 
   if (task.description?.trim()) {
@@ -234,7 +253,7 @@ export class JiraExporter {
     this.client = new JiraClient(config, apiToken);
   }
 
-  async exportIssue(issueKey: string, options: ExportOptions): Promise<string> {
+  async exportIssue(issueKey: string, options: ExportOptions): Promise<ExportIssueOutcome> {
     const customFieldDefs = options.customFieldDefs ?? {};
     const resolved = resolveFieldSet(options.fieldSelector, customFieldDefs);
 
@@ -254,12 +273,15 @@ export class JiraExporter {
     const taskMdPath = join(taskDir, 'task.md');
     writeFileSync(taskMdPath, buildTaskMarkdown(task, taskDir, selectedKeys), 'utf-8');
 
+    const videos: VideoExtractionInfo[] = [];
     if (task.attachments.length > 0) {
       const attachmentsDir = join(taskDir, 'attachments');
       mkdirSync(attachmentsDir, { recursive: true });
 
       const downloaded = new Set<string>();
       const processedVideos = new Set<string>();
+
+      console.log(`  ↓ ${task.key}: downloading ${task.attachments.length} attachment(s)...`);
 
       for (const att of task.attachments) {
         let filename = att.filename;
@@ -288,6 +310,9 @@ export class JiraExporter {
         ) {
           const framesDir = join(attachmentsDir, `${filename}-frames`);
           const opts = { ...DEFAULT_VIDEO_OPTS, ...options.videoFrames };
+          console.log(
+            `  🎬 ${filename}: extracting frames (fps=${opts.fps}, max=${opts.maxFrames})...`
+          );
           const result = await extractAndDeduplicateFrames(attPath, framesDir, {
             fps: opts.fps,
             format: 'jpeg',
@@ -300,8 +325,19 @@ export class JiraExporter {
             console.log(
               `  ✓ ${filename}: extracted ${result.frameCount} frames, kept ${result.dedupedCount}`
             );
+            videos.push({
+              filename,
+              frameCount: result.frameCount,
+              dedupedCount: result.dedupedCount,
+            });
           } else {
             console.warn(`  ⚠ ${filename}: ${result.error}`);
+            videos.push({
+              filename,
+              frameCount: 0,
+              dedupedCount: 0,
+              error: result.error,
+            });
           }
           processedVideos.add(`${task.key}:${att.id}`);
         }
@@ -312,7 +348,12 @@ export class JiraExporter {
     const updated = addFrameLinksToContent(finalContent, taskDir);
     if (updated !== finalContent) writeFileSync(taskMdPath, updated, 'utf-8');
 
-    return taskDir;
+    return {
+      taskDir,
+      taskMdPath,
+      attachmentCount: task.attachments.length,
+      videos,
+    };
   }
 
   async exportIssues(issueKeys: string[], options: ExportOptions): Promise<ExportResult> {
@@ -331,9 +372,13 @@ export class JiraExporter {
       try {
         const taskDir = join(options.outputDir, key.toLowerCase());
         const existed = existsSync(taskDir);
-        await this.exportIssue(key, options);
-        const taskMdPath = join(taskDir, 'task.md');
-        (existed ? result.updated : result.imported).push({ key, path: taskMdPath });
+        const outcome = await this.exportIssue(key, options);
+        (existed ? result.updated : result.imported).push({
+          key,
+          path: outcome.taskMdPath,
+          attachmentCount: outcome.attachmentCount,
+          videos: outcome.videos,
+        });
       } catch (error) {
         result.failed.push({
           key,

@@ -72,21 +72,21 @@ function makeExporter(task: JiraTaskData): JiraExporter {
 }
 
 describe('JiraExporter.exportIssue frontmatter', () => {
-  it('emits a nested jira: block with default preset fields', async () => {
+  it('emits a flat top-level frontmatter with default preset fields', async () => {
     const exporter = makeExporter(FULL_TASK);
     await exporter.exportIssue('PROJ-1', { outputDir: tmpDir });
     const content = readFileSync(join(tmpDir, 'proj-1', 'task.md'), 'utf-8');
 
-    expect(content).toMatch(/^---\njira:\n/);
-    expect(content).toMatch(/^ {2}key: "PROJ-1"$/m);
-    expect(content).toMatch(/^ {2}status: "In Progress"$/m);
-    expect(content).toMatch(/^ {2}priority: "High"$/m);
-    expect(content).toMatch(/^ {2}assignee: "Jane Doe"$/m);
-    expect(content).toMatch(/^ {2}labels: \["tech-debt", "p1"\]$/m);
-    expect(content).toMatch(/^ {2}sprint: "Sprint 42"$/m);
-    expect(content).toMatch(/^ {2}parent: "PROJ-100 - Parent"$/m);
-    expect(content).toMatch(/^ {2}epic: "PROJ-50 - Epic"$/m);
-    // Old flat keys must not appear.
+    expect(content).toMatch(/^---\nkey: "PROJ-1"\n/);
+    expect(content).toMatch(/^status: "In Progress"$/m);
+    expect(content).toMatch(/^priority: "High"$/m);
+    expect(content).toMatch(/^assignee: "Jane Doe"$/m);
+    expect(content).toMatch(/^labels: \["tech-debt", "p1"\]$/m);
+    expect(content).toMatch(/^sprint: "Sprint 42"$/m);
+    expect(content).toMatch(/^parent: "PROJ-100 - Parent"$/m);
+    expect(content).toMatch(/^epic: "PROJ-50 - Epic"$/m);
+    // The old jira: namespace and legacy jiraKey/jiraStatus must not appear.
+    expect(content).not.toMatch(/^jira:/m);
     expect(content).not.toMatch(/^jiraKey:/m);
     expect(content).not.toMatch(/^jiraStatus:/m);
   });
@@ -104,8 +104,8 @@ describe('JiraExporter.exportIssue frontmatter', () => {
     await exporter.exportIssue('PROJ-9', { outputDir: tmpDir });
     const content = readFileSync(join(tmpDir, 'proj-9', 'task.md'), 'utf-8');
 
-    expect(content).toMatch(/^ {2}key: "PROJ-9"$/m);
-    expect(content).toMatch(/^ {2}status: "Open"$/m);
+    expect(content).toMatch(/^key: "PROJ-9"$/m);
+    expect(content).toMatch(/^status: "Open"$/m);
     expect(content).not.toMatch(/labels:/);
     expect(content).not.toMatch(/components:/);
     expect(content).not.toMatch(/dueDate:/);
@@ -188,6 +188,35 @@ describe('JiraExporter.exportIssue frontmatter', () => {
     await exporter.exportIssue('PROJ-1', { outputDir: tmpDir });
     const content = readFileSync(join(tmpDir, 'proj-1', 'task.md'), 'utf-8');
     expect(content).not.toMatch(/customFields:/);
+  });
+
+  it('returns an outcome with taskMdPath, attachmentCount and videos', async () => {
+    const taskWithAttachments: JiraTaskData = {
+      ...FULL_TASK,
+      attachments: [
+        { id: '1', filename: 'doc.pdf', url: 'https://x.example/1', size: 100 },
+        { id: '2', filename: 'image.png', url: 'https://x.example/2', size: 200 },
+      ],
+    };
+    const exporter = makeExporter(taskWithAttachments);
+    const outcome = await exporter.exportIssue('PROJ-1', { outputDir: tmpDir });
+    expect(outcome.taskMdPath).toMatch(/proj-1\/task\.md$/);
+    expect(outcome.attachmentCount).toBe(2);
+    expect(outcome.videos).toEqual([]);
+  });
+
+  it('exportIssues result items include attachmentCount and videos', async () => {
+    const taskWithAttachments: JiraTaskData = {
+      ...FULL_TASK,
+      attachments: [{ id: '1', filename: 'doc.pdf', url: 'https://x.example/1', size: 100 }],
+    };
+    const exporter = makeExporter(taskWithAttachments);
+    const result = await exporter.exportIssues(['PROJ-1'], { outputDir: tmpDir });
+    expect(result.imported).toHaveLength(1);
+    expect(result.imported[0].key).toBe('PROJ-1');
+    expect(result.imported[0].attachmentCount).toBe(1);
+    expect(result.imported[0].videos).toEqual([]);
+    expect(result.imported[0].path).toMatch(/proj-1\/task\.md$/);
   });
 
   it('emits inline scalar array for labels', async () => {

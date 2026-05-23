@@ -53,4 +53,44 @@ describe('parseIssueKeyArgs', () => {
   it('rejects partial org/ qualification', () => {
     expect(() => parseIssueKeyArgs(['acme/PROJ-1', 'PROJ-2'])).toThrow(/all issue keys must include/i);
   });
+
+  it('splits a single comma-separated arg into multiple keys', () => {
+    expect(parseIssueKeyArgs(['PROJ-1,PROJ-2'])).toEqual({
+      org: undefined,
+      projectKey: 'PROJ',
+      keys: ['PROJ-1', 'PROJ-2'],
+    });
+  });
+
+  it('mixes comma- and space-separated args', () => {
+    expect(parseIssueKeyArgs(['PROJ-1,PROJ-2', 'PROJ-3'])).toEqual({
+      org: undefined,
+      projectKey: 'PROJ',
+      keys: ['PROJ-1', 'PROJ-2', 'PROJ-3'],
+    });
+  });
+
+  it('honors org/ prefix on each comma-separated key', () => {
+    expect(parseIssueKeyArgs(['acme/PROJ-1,acme/PROJ-2'])).toEqual({
+      org: 'acme',
+      projectKey: 'PROJ',
+      keys: ['PROJ-1', 'PROJ-2'],
+    });
+  });
+
+  it('tolerates whitespace and empty tokens around commas', () => {
+    expect(parseIssueKeyArgs(['PROJ-1, , PROJ-2'])).toEqual({
+      org: undefined,
+      projectKey: 'PROJ',
+      keys: ['PROJ-1', 'PROJ-2'],
+    });
+  });
+
+  it('tolerates a trailing comma', () => {
+    expect(parseIssueKeyArgs(['PROJ-1,'])).toEqual({
+      org: undefined,
+      projectKey: 'PROJ',
+      keys: ['PROJ-1'],
+    });
+  });
 });

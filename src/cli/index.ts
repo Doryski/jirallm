@@ -190,14 +190,22 @@ async function runExport(rawArgs: string[], flags: ExportFlags): Promise<void> {
     videoFrames: { enabled: videoEnabled, fps, maxFrames },
   });
 
+  type Item = (typeof result.imported)[number];
+  const printItem = (item: Item) => {
+    console.log(`    - ${item.key}: ${item.path}`);
+    if (item.attachmentCount > 0) {
+      console.log(`        attachments: ${item.attachmentCount}`);
+    }
+  };
+
   console.log('\nExport summary:');
   if (result.imported.length > 0) {
     console.log(`  Imported (${result.imported.length}):`);
-    for (const { key, path } of result.imported) console.log(`    - ${key}: ${path}`);
+    for (const item of result.imported) printItem(item);
   }
   if (result.updated.length > 0) {
     console.log(`  Updated (${result.updated.length}):`);
-    for (const { key, path } of result.updated) console.log(`    - ${key}: ${path}`);
+    for (const item of result.updated) printItem(item);
   }
   if (result.failed.length > 0) {
     console.log(`  Failed (${result.failed.length}):`);

@@ -35,8 +35,12 @@ export type ResolvedKeys = {
 };
 
 export function parseIssueKeyArgs(inputs: string[]): ResolvedKeys {
-  if (inputs.length === 0) throw new Error('No issue keys provided.');
-  const parsed = inputs.map(parseIssueKey);
+  const flat = inputs
+    .flatMap((s) => s.split(','))
+    .map((t) => t.trim())
+    .filter(Boolean);
+  if (flat.length === 0) throw new Error('No issue keys provided.');
+  const parsed = flat.map(parseIssueKey);
 
   const projectKey = parsed[0].projectKey;
   for (const p of parsed) {
