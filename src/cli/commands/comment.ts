@@ -1,9 +1,10 @@
 import { readFileSync } from 'fs';
-import { loadProfile, findOrgsByProjectKey } from '../../lib/config.js';
+import { loadProfile } from '../../lib/config.js';
 import { JiraClient } from '../../lib/jiraClient.js';
 import { markdownToWiki } from '../../lib/markdownToWiki.js';
 import { splitIntoChunks } from '../../lib/chunkMarkdown.js';
 import { parseIssueKey } from '../issueKey.js';
+import { resolveOrg } from '../resolveOrg.js';
 
 export type CommentOptions = {
   file?: string;
@@ -17,19 +18,6 @@ export type CommentOptions = {
 };
 
 const DEFAULT_MAX_CHARS = 25000;
-
-function resolveOrg(parsedOrg: string | undefined, flagOrg: string | undefined, projectKey: string): string {
-  if (flagOrg) return flagOrg;
-  if (parsedOrg) return parsedOrg;
-  const matches = findOrgsByProjectKey(projectKey);
-  if (matches.length === 1) return matches[0];
-  if (matches.length === 0) {
-    throw new Error(`Project "${projectKey}" not found in any configured org. Pass --org.`);
-  }
-  throw new Error(
-    `Project "${projectKey}" exists in multiple orgs (${matches.join(', ')}). Pass --org.`
-  );
-}
 
 export async function runComment(issueKeyArg: string, opts: CommentOptions): Promise<void> {
   const parsed = parseIssueKey(issueKeyArg);

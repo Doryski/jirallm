@@ -13,6 +13,7 @@ import { runSetup } from './commands/setup.js';
 import { runComment, runDeleteComment } from './commands/comment.js';
 import { runBoardIssues } from './commands/board.js';
 import { runTransition } from './commands/transition.js';
+import { runWorklog } from './commands/worklog.js';
 
 type ExportFlags = {
   org?: string;
@@ -429,6 +430,47 @@ program
 Examples:
   $ jirallm transition PROJ-123 --to "In Review"
   $ jirallm transition PROJ-123 --list
+`
+  );
+
+program
+  .command('worklog')
+  .description('Batch log work to Jira from a JSON array (stdin or --file).')
+  .option('-f, --file <path>', 'Read JSON array from a file (default: stdin)')
+  .option('-o, --org <name>', 'Default org for entries without an org/ prefix or "org" field')
+  .option('--no-wiki', 'Skip markdown→wiki conversion of description')
+  .option('--dry-run', 'Validate and print what would be posted, without calling Jira')
+  .action(async (opts: { file?: string; org?: string; wiki?: boolean; dryRun?: boolean }) => {
+    try {
+      await runWorklog({
+        file: opts.file,
+        org: opts.org,
+        noWiki: opts.wiki === false,
+        dryRun: opts.dryRun,
+      });
+    } catch (err) {
+      console.error((err as Error).message);
+      process.exit(1);
+    }
+  })
+  .addHelpText(
+    'after',
+    `
+JSON entry shape (any 2 of startTime/endTime/duration required):
+  {
+    "issueKey": "PROJ-123",         // required; supports "org/PROJ-123"
+    "startTime": "2026-05-23T09:00:00+02:00",
+    "endTime":   "2026-05-23T10:30:00+02:00",
+    "duration":  "1h 30m",           // seconds | "1h 30m" | "PT1H30M"
+    "description": "**markdown** ok",
+    "org": "acme",                   // optional per-entry override
+    "visibility": { "type": "role", "value": "Developers" }
+  }
+
+Examples:
+  $ jirallm worklog -f ./worklogs.json
+  $ cat worklogs.json | jirallm worklog --dry-run
+  $ echo '[{"issueKey":"PROJ-1","startTime":"2026-05-23T09:00:00+02:00","duration":"1h"}]' | jirallm worklog
 `
   );
 

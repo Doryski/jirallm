@@ -509,6 +509,35 @@ export class JiraClient {
     return { id: json.id };
   }
 
+  async addWorklog(
+    issueKey: string,
+    payload: {
+      started: string;
+      timeSpentSeconds: number;
+      comment?: string;
+      visibility?: { type: 'group' | 'role'; value: string };
+    }
+  ): Promise<{ id: string; issueId: string }> {
+    const url = `${this.config.baseUrl}/rest/api/2/issue/${issueKey}/worklog`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: this.authHeader,
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(
+        `Jira addWorklog failed: ${response.status} ${response.statusText}\n${errorText}`
+      );
+    }
+    const json = (await response.json()) as { id: string; issueId: string };
+    return { id: json.id, issueId: json.issueId };
+  }
+
   async deleteComment(issueKey: string, commentId: string): Promise<void> {
     const url = `${this.config.baseUrl}/rest/api/2/issue/${issueKey}/comment/${commentId}`;
     const response = await fetch(url, {
