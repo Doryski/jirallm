@@ -14,6 +14,7 @@ import { runComment, runDeleteComment } from './commands/comment.js';
 import { runBoardIssues } from './commands/board.js';
 import { runTransition } from './commands/transition.js';
 import { runWorklog } from './commands/worklog.js';
+import { parseFieldsFlag, resolveFieldSet } from '../lib/exportFields.js';
 
 type ExportFlags = {
   org?: string;
@@ -26,6 +27,8 @@ type ExportFlags = {
   fps?: string;
   maxFrames?: string;
   includeSubtasks?: boolean;
+  fields?: string;
+  dryRun?: boolean;
 };
 
 async function pickOrgInteractively(
@@ -99,6 +102,8 @@ async function runExport(rawArgs: string[], flags: ExportFlags): Promise<void> {
   let videoEnabled = flags.videoFrames;
   let fps = flags.fps ? parseInt(flags.fps, 10) : 5;
   let maxFrames = flags.maxFrames ? parseInt(flags.maxFrames, 10) : 10;
+  let fieldSelector = flags.fields ? parseFieldsFlag(flags.fields) : undefined;
+  let customFieldDefs: import('../lib/exportFields.js').CustomFieldDefs | undefined;
 
   let keys: string[];
   let org: string | undefined = flags.org;
@@ -126,6 +131,14 @@ async function runExport(rawArgs: string[], flags: ExportFlags): Promise<void> {
       if (flags.includeSubtasks === undefined && resolved.org.includeSubtasks !== undefined) {
         includeSubtasks = resolved.org.includeSubtasks;
       }
+      if (resolved.org.export) {
+        if (!fieldSelector && resolved.org.export.fieldSelector) {
+          fieldSelector = resolved.org.export.fieldSelector;
+        }
+        if (resolved.org.export.customFieldDefs) {
+          customFieldDefs = resolved.org.export.customFieldDefs;
+        }
+      }
       if (resolved.org.videoFrames) {
         if (resolved.org.videoFrames.enabled === false && flags.videoFrames !== false) {
           videoEnabled = false;
@@ -143,6 +156,25 @@ async function runExport(rawArgs: string[], flags: ExportFlags): Promise<void> {
     }
   }
 
+  if (flags.dryRun) {
+    const resolved = resolveFieldSet(fieldSelector, customFieldDefs ?? {});
+    console.log('Dry run — no Jira calls or file writes will be performed.');
+    console.log(`Org:           ${org}`);
+    console.log(`Project:       ${projectKey}`);
+    console.log(`Base URL:      ${baseUrl}`);
+    console.log(`Output dir:    ${outputDir}`);
+    console.log(`Issues (${keys.length}): ${keys.join(', ')}`);
+    console.log(`Field preset:  ${fieldSelector?.preset ?? '(default)'}`);
+    if (fieldSelector?.include?.length) console.log(`  include:     ${fieldSelector.include.join(', ')}`);
+    if (fieldSelector?.exclude?.length) console.log(`  exclude:     ${fieldSelector.exclude.join(', ')}`);
+    console.log(`Frontmatter fields: ${resolved.friendlyKeys.join(', ')}`);
+    console.log(`Jira fields requested: ${resolved.jiraFieldIds.join(', ')}`);
+    if (customFieldDefs && Object.keys(customFieldDefs).length > 0) {
+      console.log(`Custom fields: ${Object.keys(customFieldDefs).join(', ')}`);
+    }
+    return;
+  }
+
   const exporter = new JiraExporter(
     { baseUrl: baseUrl!, projectKey: projectKey!, userEmail: userEmail! },
     apiToken!
@@ -153,6 +185,8 @@ async function runExport(rawArgs: string[], flags: ExportFlags): Promise<void> {
   const result = await exporter.exportIssues(keys, {
     outputDir,
     includeSubtasks,
+    fieldSelector,
+    customFieldDefs,
     videoFrames: { enabled: videoEnabled, fps, maxFrames },
   });
 
@@ -193,6 +227,11 @@ program
   .option('--fps <n>', 'Frame extraction FPS')
   .option('--max-frames <n>', 'Max frames kept per video')
   .option('--include-subtasks', 'Fetch and include subtask metadata')
+  .option(
+    '--fields <list>',
+    'Comma-separated friendly field names to include in frontmatter. Use +name/-name to add/remove, or "all" | "default" | "minimal".'
+  )
+  .option('--dry-run', 'Resolve config & print plan without calling Jira or writing files')
   .action(async (keys: string[], flags: ExportFlags) => {
     await runExport(keys, flags);
   })

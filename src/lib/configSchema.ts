@@ -16,12 +16,35 @@ const projectRawSchema = z
   })
   .strict();
 
+const exportFieldsRawSchema = z
+  .object({
+    preset: z.enum(['all', 'minimal', 'default']).optional(),
+    include: z.array(z.string()).optional(),
+    exclude: z.array(z.string()).optional(),
+  })
+  .strict();
+
+const customFieldRawSchema = z
+  .object({
+    id: z.string(),
+    type: z.enum(['scalar', 'select', 'user', 'sprint', 'number', 'array']),
+  })
+  .strict();
+
+const exportRawSchema = z
+  .object({
+    fields: exportFieldsRawSchema.optional(),
+    custom_fields: z.record(z.string(), customFieldRawSchema).optional(),
+  })
+  .strict();
+
 const orgRawSchema = z
   .object({
     base_url: z.url(),
     user_email: z.email(),
     include_subtasks: z.boolean().optional(),
     video_frames: videoFramesRawSchema.optional(),
+    export: exportRawSchema.optional(),
     projects: z.record(z.string(), projectRawSchema).optional(),
   })
   .strict();

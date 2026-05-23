@@ -35,7 +35,7 @@ import { runWorklog } from './worklog.js';
 
 let logs: string[];
 let errs: string[];
-let originalExitCode: number | string | undefined;
+let originalExitCode: number | string | null | undefined;
 
 function captureConsole() {
   logs = [];

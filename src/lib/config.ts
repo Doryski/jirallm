@@ -5,6 +5,7 @@ import TOML from '@iarna/toml';
 import type { JiraConfig } from './jiraClient.js';
 import { getToken } from './credentials.js';
 import { parseConfig, type RawConfig, type RawOrg, type RawProject } from './configSchema.js';
+import type { CustomFieldDefs, FieldSelector } from './exportFields.js';
 
 export type VideoFramesConfig = {
   enabled?: boolean;
@@ -19,12 +20,18 @@ export type Project = {
   outputDir?: string;
 };
 
+export type ExportConfig = {
+  fieldSelector?: FieldSelector;
+  customFieldDefs?: CustomFieldDefs;
+};
+
 export type Organization = {
   name: string;
   baseUrl: string;
   userEmail: string;
   includeSubtasks?: boolean;
   videoFrames?: VideoFramesConfig;
+  export?: ExportConfig;
   projects: Record<string, Project>;
 };
 
@@ -91,6 +98,18 @@ function buildOrg(name: string, raw: RawConfig): Organization {
           quality: r.video_frames.quality,
           maxFrames: r.video_frames.max_frames,
           similarityThreshold: r.video_frames.similarity_threshold,
+        }
+      : undefined,
+    export: r.export
+      ? {
+          fieldSelector: r.export.fields
+            ? {
+                preset: r.export.fields.preset,
+                include: r.export.fields.include,
+                exclude: r.export.fields.exclude,
+              }
+            : undefined,
+          customFieldDefs: r.export.custom_fields,
         }
       : undefined,
     projects,
@@ -175,6 +194,19 @@ function orgToRaw(org: Organization): RawOrg {
       max_frames: org.videoFrames.maxFrames,
       similarity_threshold: org.videoFrames.similarityThreshold,
     };
+  }
+  if (org.export) {
+    raw.export = {};
+    if (org.export.fieldSelector) {
+      raw.export.fields = {
+        preset: org.export.fieldSelector.preset,
+        include: org.export.fieldSelector.include,
+        exclude: org.export.fieldSelector.exclude,
+      };
+    }
+    if (org.export.customFieldDefs) {
+      raw.export.custom_fields = org.export.customFieldDefs;
+    }
   }
   const projects: Record<string, RawProject> = {};
   for (const [key, p] of Object.entries(org.projects)) {

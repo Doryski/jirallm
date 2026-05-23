@@ -127,6 +127,85 @@ describe('upsertOrg + upsertProject', () => {
   });
 });
 
+describe('export field config', () => {
+  it('parses export.fields and export.custom_fields from TOML', async () => {
+    writeFileSync(
+      configPath,
+      `[orgs.acme]
+base_url = "https://acme.atlassian.net"
+user_email = "u@x.example"
+
+[orgs.acme.projects.PROJ]
+
+[orgs.acme.export.fields]
+preset = "default"
+include = ["sprint", "storyPoints"]
+exclude = ["creator"]
+
+[orgs.acme.export.custom_fields.severity]
+id = "customfield_12345"
+type = "select"
+
+[orgs.acme.export.custom_fields.team]
+id = "customfield_67890"
+type = "scalar"
+`
+    );
+    const r = await loadProfile({ org: 'acme', project: 'PROJ', configPath });
+    expect(r.org.export?.fieldSelector?.preset).toBe('default');
+    expect(r.org.export?.fieldSelector?.include).toEqual(['sprint', 'storyPoints']);
+    expect(r.org.export?.fieldSelector?.exclude).toEqual(['creator']);
+    expect(r.org.export?.customFieldDefs?.severity).toEqual({
+      id: 'customfield_12345',
+      type: 'select',
+    });
+    expect(r.org.export?.customFieldDefs?.team).toEqual({
+      id: 'customfield_67890',
+      type: 'scalar',
+    });
+  });
+
+  it('rejects an invalid custom_fields.type', () => {
+    writeFileSync(
+      configPath,
+      `[orgs.acme]
+base_url = "https://acme.atlassian.net"
+user_email = "u@x.example"
+
+[orgs.acme.export.custom_fields.severity]
+id = "customfield_12345"
+type = "nope"
+`
+    );
+    expect(() => readConfig(configPath)).toThrow(/custom_fields\.severity\.type/);
+  });
+
+  it('round-trips an org with export config through upsertOrg', () => {
+    upsertOrg(
+      {
+        name: 'acme',
+        baseUrl: 'https://acme.example',
+        userEmail: 'u@x.example',
+        export: {
+          fieldSelector: { preset: 'all', include: ['sprint'], exclude: ['creator'] },
+          customFieldDefs: {
+            severity: { id: 'customfield_12345', type: 'select' },
+          },
+        },
+        projects: {},
+      },
+      configPath
+    );
+    const raw = readConfig(configPath);
+    expect(raw.orgs?.acme.export?.fields?.preset).toBe('all');
+    expect(raw.orgs?.acme.export?.fields?.include).toEqual(['sprint']);
+    expect(raw.orgs?.acme.export?.custom_fields?.severity).toEqual({
+      id: 'customfield_12345',
+      type: 'select',
+    });
+  });
+});
+
 describe('findOrgsByProjectKey', () => {
   it('returns empty when no match', () => {
     writeFileSync(configPath, SAMPLE_CONFIG);
