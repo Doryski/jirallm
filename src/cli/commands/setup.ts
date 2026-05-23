@@ -1,7 +1,7 @@
-import { spawn } from 'child_process';
 import { intro, outro, confirm, note, isCancel, cancel } from '@clack/prompts';
 import { checkFFmpegInstalled, resolveFfmpegBinary } from '../../lib/videoFrameExtractor.js';
 import {
+  detectJsPackageManagerFromUserAgent,
   detectOS,
   detectPackageManager,
   ffmpegInstallCommand,
@@ -9,16 +9,9 @@ import {
   HOMEBREW_INSTALL_CMD,
   type PackageManager,
 } from '../../lib/platform.js';
+import { runInteractive } from '../../lib/runCommand.js';
 
 type SetupOpts = { bundled?: boolean; yes?: boolean };
-
-function runInteractive(command: string): Promise<number> {
-  return new Promise((resolve) => {
-    const child = spawn(command, { shell: true, stdio: 'inherit' });
-    child.on('exit', (code) => resolve(code ?? 1));
-    child.on('error', () => resolve(1));
-  });
-}
 
 async function confirmStep(message: string, defaultYes: boolean): Promise<boolean> {
   const ok = await confirm({ message, initialValue: defaultYes });
@@ -30,10 +23,9 @@ async function confirmStep(message: string, defaultYes: boolean): Promise<boolea
 }
 
 function detectGlobalInstaller(): string {
-  const ua = process.env.npm_config_user_agent ?? '';
-  if (ua.includes('pnpm')) return 'pnpm add -g ffmpeg-static';
-  if (ua.includes('yarn')) return 'yarn global add ffmpeg-static';
-  // default: npm
+  const pm = detectJsPackageManagerFromUserAgent();
+  if (pm === 'pnpm') return 'pnpm add -g ffmpeg-static';
+  if (pm === 'yarn') return 'yarn global add ffmpeg-static';
   return 'npm install -g ffmpeg-static';
 }
 

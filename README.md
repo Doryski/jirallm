@@ -41,6 +41,15 @@ pnpm add -g jirallm
 pnpm add jirallm
 ```
 
+### Updating
+
+`jirallm` checks for new versions once a day in the background and prints a notice on the next invocation. To upgrade:
+
+```bash
+jirallm upgrade           # auto-detects npm / pnpm / yarn / Homebrew
+jirallm upgrade --check   # just report whether an update is available
+```
+
 ## Configuration
 
 The recommended way to configure `jirallm` is the interactive wizard:

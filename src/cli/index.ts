@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { createRequire } from 'node:module';
 import { Command } from 'commander';
+import updateNotifier from 'update-notifier';
 import { select, isCancel, cancel } from '@clack/prompts';
 import { JiraExporter } from '../lib/exporter.js';
 import { findOrgsByProjectKey, loadProfile, readConfig } from '../lib/config.js';
@@ -28,6 +29,7 @@ import { runAssign } from './commands/assign.js';
 import { runLink, runLinkRemove } from './commands/link.js';
 import { runAttach, runAttachRemove } from './commands/attach.js';
 import { runWatchers } from './commands/watchers.js';
+import { runUpgrade } from './commands/upgrade.js';
 import { parseFieldsFlag, resolveFieldSet } from '../lib/exportFields.js';
 
 type ExportFlags = {
@@ -239,6 +241,15 @@ const pkg = createRequire(import.meta.url)('../../package.json') as {
 
 program.name(pkg.name).description(pkg.description).version(pkg.version);
 
+const notifier = updateNotifier({ pkg, updateCheckInterval: 1000 * 60 * 60 * 24 });
+if (!process.argv.includes('--json')) {
+  notifier.notify({
+    defer: true,
+    isGlobal: true,
+    message: `Update available {currentVersion} → {latestVersion}\nRun \`${pkg.name} upgrade\` to update.`,
+  });
+}
+
 program
   .argument('[issue-keys...]', 'Jira issue keys, e.g. PROJ-123 or acme/PROJ-123')
   .option('-o, --org <name>', 'Organization name from config (auto-resolved from issue prefix if unique)')
@@ -387,6 +398,29 @@ Examples:
   $ jirallm setup
   $ jirallm setup --yes
   $ jirallm setup --bundled
+`
+  );
+
+program
+  .command('upgrade')
+  .description('Upgrade jirallm to the latest version (auto-detects npm/pnpm/yarn/Homebrew)')
+  .option('-y, --yes', 'Skip confirmation prompt')
+  .option('--check', 'Print whether an update is available without installing (exits non-zero if outdated)')
+  .action(async (opts: { yes?: boolean; check?: boolean }) => {
+    try {
+      await runUpgrade(opts);
+    } catch (err) {
+      console.error((err as Error).message);
+      process.exit(1);
+    }
+  })
+  .addHelpText(
+    'after',
+    `
+Examples:
+  $ jirallm upgrade
+  $ jirallm upgrade --yes
+  $ jirallm upgrade --check
 `
   );
 

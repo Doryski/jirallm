@@ -81,5 +81,16 @@ export async function getFfmpegInstallHint(): Promise<string> {
   return lines.join('\n');
 }
 
+export type JsPackageManager = 'npm' | 'pnpm' | 'yarn';
+
+export function detectJsPackageManagerFromUserAgent(
+  userAgent: string | undefined = process.env.npm_config_user_agent
+): JsPackageManager {
+  const ua = userAgent ?? '';
+  if (ua.includes('pnpm')) return 'pnpm';
+  if (ua.includes('yarn')) return 'yarn';
+  return 'npm';
+}
+
 export const HOMEBREW_INSTALL_CMD =
   '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/main/install.sh)"';

@@ -1,7 +1,15 @@
-import { exec } from 'child_process';
+import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 
 const execAsync = promisify(exec);
+
+export function runInteractive(command: string): Promise<number> {
+  return new Promise((resolve) => {
+    const child = spawn(command, { shell: true, stdio: 'inherit' });
+    child.on('exit', (code) => resolve(code ?? 1));
+    child.on('error', () => resolve(1));
+  });
+}
 
 type RunCommandOptions = {
   shouldThrow?: boolean;
