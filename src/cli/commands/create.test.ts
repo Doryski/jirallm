@@ -6,6 +6,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../../lib/config.js', () => ({
   loadProfile: vi.fn(async () => ({
     config: { baseUrl: 'https://x', userEmail: 'u@x', projectKey: 'PROJ' },
+    org: {
+      name: 'acme',
+      baseUrl: 'https://x',
+      userEmail: 'u@x',
+      projects: {},
+      export: { customFieldDefs: { severity: { id: 'customfield_10050', type: 'select' } } },
+    },
     project: { key: 'PROJ' },
     apiToken: 'tok',
   })),
@@ -105,5 +112,36 @@ describe('runCreate', () => {
     Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
     await runCreate({ org: 'acme', type: 'Task', summary: 's' });
     expect(createIssueMock.mock.calls[0][0].descriptionMarkdown).toBeUndefined();
+  });
+
+  it('parses --components into a string array', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runCreate({ org: 'acme', type: 'Bug', summary: 's', components: 'Web, API' });
+    expect(createIssueMock.mock.calls[0][0].components).toEqual(['Web', 'API']);
+  });
+
+  it('resolves --field via configured custom field defs', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runCreate({ org: 'acme', type: 'Bug', summary: 's', field: ['severity=High'] });
+    expect(createIssueMock.mock.calls[0][0].customFields).toEqual({
+      customfield_10050: { value: 'High' },
+    });
+  });
+
+  it('surfaces shaped customFields/components in --dry-run output', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runCreate({
+      org: 'acme',
+      type: 'Bug',
+      summary: 's',
+      components: 'Web',
+      field: ['severity=High'],
+      dryRun: true,
+      json: true,
+    });
+    expect(createIssueMock).not.toHaveBeenCalled();
+    const parsed = JSON.parse(writes.join(''));
+    expect(parsed.input.components).toEqual(['Web']);
+    expect(parsed.input.customFields).toEqual({ customfield_10050: { value: 'High' } });
   });
 });

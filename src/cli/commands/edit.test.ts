@@ -6,6 +6,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../../lib/config.js', () => ({
   loadProfile: vi.fn(async () => ({
     config: { baseUrl: 'https://x', userEmail: 'u@x', projectKey: 'PROJ' },
+    org: {
+      name: 'solo',
+      baseUrl: 'https://x',
+      userEmail: 'u@x',
+      projects: {},
+      export: { customFieldDefs: { reproductionRate: { id: 'customfield_10051', type: 'select' } } },
+    },
     apiToken: 'tok',
   })),
   findOrgsByProjectKey: vi.fn(() => ['solo']),
@@ -84,5 +91,18 @@ describe('runEdit', () => {
     Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
     await runEdit({ issueKey: 'PROJ-1', summary: 'x', json: true });
     expect(JSON.parse(writes.join(''))).toEqual({ issueKey: 'PROJ-1', updated: true });
+  });
+
+  it('parses --components and resolves --field via custom field defs', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runEdit({
+      issueKey: 'PROJ-1',
+      components: 'Web,API',
+      field: ['reproductionRate=Always'],
+    });
+    expect(editIssueMock.mock.calls[0][1].components).toEqual(['Web', 'API']);
+    expect(editIssueMock.mock.calls[0][1].customFields).toEqual({
+      customfield_10051: { value: 'Always' },
+    });
   });
 });

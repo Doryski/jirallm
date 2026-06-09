@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { loadProfile } from '../../lib/config.js';
 import { JiraClient } from '../../lib/jiraClient.js';
+import { parseFieldFlags } from '../../lib/customFieldWrite.js';
 import { printJson, shouldOutputJson } from '../jsonOutput.js';
 
 export type CreateOptions = {
@@ -14,6 +15,8 @@ export type CreateOptions = {
   labels?: string;
   priority?: string;
   parent?: string;
+  components?: string;
+  field?: string[];
   dryRun?: boolean;
   json?: boolean;
 };
@@ -30,6 +33,8 @@ export async function runCreate(opts: CreateOptions): Promise<void> {
   }
 
   const labels = opts.labels?.split(',').map((s) => s.trim()).filter(Boolean);
+  const components = opts.components?.split(',').map((s) => s.trim()).filter(Boolean);
+  const customFields = parseFieldFlags(opts.field, profile.org?.export?.customFieldDefs);
 
   const input = {
     projectKey,
@@ -40,6 +45,8 @@ export async function runCreate(opts: CreateOptions): Promise<void> {
     labels,
     priority: opts.priority,
     parentKey: opts.parent,
+    components,
+    customFields,
   };
 
   if (opts.dryRun) {

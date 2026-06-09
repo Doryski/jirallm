@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { loadProfile } from '../../lib/config.js';
 import { JiraClient } from '../../lib/jiraClient.js';
+import { parseFieldFlags } from '../../lib/customFieldWrite.js';
 import { parseIssueKey } from '../issueKey.js';
 import { resolveOrg } from '../resolveOrg.js';
 import { printJson, shouldOutputJson } from '../jsonOutput.js';
@@ -15,6 +16,8 @@ export type EditOptions = {
   unassign?: boolean;
   labels?: string;
   priority?: string;
+  components?: string;
+  field?: string[];
   dryRun?: boolean;
   json?: boolean;
 };
@@ -35,6 +38,8 @@ export async function runEdit(opts: EditOptions): Promise<void> {
     ? null
     : opts.assignee;
   const labels = opts.labels?.split(',').map((s) => s.trim()).filter(Boolean);
+  const components = opts.components?.split(',').map((s) => s.trim()).filter(Boolean);
+  const customFields = parseFieldFlags(opts.field, profile.org?.export?.customFieldDefs);
 
   const fields = {
     summary: opts.summary,
@@ -42,6 +47,8 @@ export async function runEdit(opts: EditOptions): Promise<void> {
     assigneeAccountId,
     labels,
     priority: opts.priority,
+    components,
+    customFields,
   };
 
   if (opts.dryRun) {

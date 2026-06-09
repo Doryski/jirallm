@@ -115,6 +115,22 @@ describe('JiraClient.createIssue', () => {
     });
   });
 
+  it('maps components to [{ name }] and spreads pre-shaped customFields', async () => {
+    const { client, calls } = captureFetch(() => ({
+      json: { id: '1', key: 'PROJ-1', self: 'x' },
+    }));
+    await client.createIssue({
+      projectKey: 'PROJ',
+      issueType: 'Bug',
+      summary: 's',
+      components: ['Web', 'API'],
+      customFields: { customfield_10050: { value: 'High' } },
+    });
+    const body = calls[0].body as { fields: Record<string, unknown> };
+    expect(body.fields.components).toEqual([{ name: 'Web' }, { name: 'API' }]);
+    expect(body.fields.customfield_10050).toEqual({ value: 'High' });
+  });
+
   it('throws a descriptive error when Jira returns non-OK', async () => {
     const { client } = captureFetch(() => ({
       ok: false,
@@ -162,9 +178,88 @@ describe('JiraClient.editIssue', () => {
     expect(body.fields.description).toBe('_italic_');
   });
 
+  it('maps components and customFields on edit', async () => {
+    const { client, calls } = captureFetch(() => ({ status: 204 }));
+    await client.editIssue('PROJ-1', {
+      components: ['Web'],
+      customFields: { customfield_10051: { value: 'Always' } },
+    });
+    const body = calls[0].body as { fields: Record<string, unknown> };
+    expect(body.fields.components).toEqual([{ name: 'Web' }]);
+    expect(body.fields.customfield_10051).toEqual({ value: 'Always' });
+  });
+
+  it('treats customFields/components as updatable fields (not "no fields")', async () => {
+    const { client, calls } = captureFetch(() => ({ status: 204 }));
+    await client.editIssue('PROJ-1', { customFields: { customfield_10051: 1 } });
+    expect(calls[0].method).toBe('PUT');
+  });
+
   it('throws when called with no fields', async () => {
     const { client } = captureFetch(() => ({ status: 204 }));
     await expect(client.editIssue('PROJ-1', {})).rejects.toThrow(/no fields/);
+  });
+});
+
+describe('JiraClient.listComponents', () => {
+  it('GETs /project/{key}/components', async () => {
+    const { client, calls } = captureFetch(() => ({
+      json: [{ id: '1', name: 'Web' }],
+    }));
+    const result = await client.listComponents('PROJ');
+    expect(calls[0].url).toContain('/rest/api/3/project/PROJ/components');
+    expect(result).toEqual([{ id: '1', name: 'Web' }]);
+  });
+});
+
+describe('JiraClient.getCreateFields', () => {
+  it('resolves the issue type id then returns flattened fields with allowed values', async () => {
+    const { client, calls } = captureFetch((url) => {
+      if (url.includes('/issuetype/project')) {
+        return { json: [{ id: '10001', name: 'Bug', subtask: false }] };
+      }
+      if (url.endsWith('/project/PROJ')) {
+        return { json: { id: '900' } };
+      }
+      if (url.includes('/issue/createmeta/')) {
+        return {
+          json: {
+            fields: [
+              {
+                fieldId: 'customfield_10050',
+                name: 'Severity',
+                required: true,
+                schema: { type: 'option' },
+                allowedValues: [{ value: 'High' }, { value: 'Low' }],
+              },
+            ],
+          },
+        };
+      }
+      return { json: [] };
+    });
+    const fields = await client.getCreateFields('PROJ', 'bug');
+    expect(calls.some((c) => c.url.includes('/issue/createmeta/PROJ/issuetypes/10001'))).toBe(true);
+    expect(fields).toEqual([
+      {
+        fieldId: 'customfield_10050',
+        name: 'Severity',
+        required: true,
+        schemaType: 'option',
+        allowedValues: ['High', 'Low'],
+      },
+    ]);
+  });
+
+  it('throws when the issue type is not found', async () => {
+    const { client } = captureFetch((url) => {
+      if (url.includes('/issuetype/project')) {
+        return { json: [{ id: '1', name: 'Task', subtask: false }] };
+      }
+      if (url.endsWith('/project/PROJ')) return { json: { id: '900' } };
+      return { json: [] };
+    });
+    await expect(client.getCreateFields('PROJ', 'Bug')).rejects.toThrow(/not found/);
   });
 });
 

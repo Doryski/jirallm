@@ -14,6 +14,8 @@ export type {
   JiraStatus,
   JiraWatcher,
   JiraIssueLink,
+  JiraComponent,
+  JiraCreateField,
   JiraSearchPage,
   JiraPage,
   JqlIssue,
@@ -21,6 +23,12 @@ export type {
   TimeTrackingSummary,
   FetchIssueDetailsOptions,
 } from './lib/jiraClient.js';
+export {
+  formatCustomFieldWrite,
+  parseFieldFlag,
+  parseFieldFlags,
+} from './lib/customFieldWrite.js';
+export type { ParsedField } from './lib/customFieldWrite.js';
 export { markdownToWiki } from './lib/markdownToWiki.js';
 export { splitIntoChunks } from './lib/chunkMarkdown.js';
 export { JiraExporter } from './lib/exporter.js';

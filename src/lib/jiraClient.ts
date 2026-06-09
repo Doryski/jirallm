@@ -161,6 +161,20 @@ export type JiraStatus = {
   statusCategory?: { id: number; key: string; name: string; colorName?: string };
 };
 
+export type JiraComponent = {
+  id: string;
+  name: string;
+  description?: string;
+};
+
+export type JiraCreateField = {
+  fieldId: string;
+  name: string;
+  required: boolean;
+  schemaType?: string;
+  allowedValues?: string[];
+};
+
 export type JiraWatcher = {
   accountId: string;
   displayName: string;
@@ -238,7 +252,12 @@ export type FetchIssueDetailsOptions = {
   customFieldDefs?: CustomFieldDefs;
 };
 
-type JiraFieldMeta = { id: string; name: string; custom: boolean; schema?: { custom?: string } };
+type JiraFieldMeta = {
+  id: string;
+  name: string;
+  custom: boolean;
+  schema?: { type?: string; custom?: string; items?: string };
+};
 
 export type JiraTaskSummary = {
   key: string;
@@ -1052,6 +1071,45 @@ export class JiraClient {
     return this.makeRequest<JiraIssueType[]>(`/issuetype/project?projectId=${project.id}`);
   }
 
+  async listComponents(projectKey: string): Promise<JiraComponent[]> {
+    return this.makeRequest<JiraComponent[]>(`/project/${projectKey}/components`);
+  }
+
+  /**
+   * Fetch the fields available on the create screen for a given issue type, including
+   * allowedValues for select fields — helps users discover valid custom-field option strings.
+   */
+  async getCreateFields(projectKey: string, issueTypeName: string): Promise<JiraCreateField[]> {
+    const types = await this.listIssueTypes(projectKey);
+    const match = types.find((t) => t.name.toLowerCase() === issueTypeName.toLowerCase());
+    if (!match) {
+      throw new Error(
+        `Issue type "${issueTypeName}" not found in project ${projectKey}. ` +
+          `Available: ${types.map((t) => t.name).join(', ')}.`
+      );
+    }
+    type RawAllowed = { value?: string; name?: string };
+    type RawCreateField = {
+      fieldId: string;
+      name: string;
+      required: boolean;
+      schema?: { type?: string };
+      allowedValues?: RawAllowed[];
+    };
+    const response = await this.makeRequest<{ fields: RawCreateField[] }>(
+      `/issue/createmeta/${projectKey}/issuetypes/${match.id}`
+    );
+    return response.fields.map((f) => ({
+      fieldId: f.fieldId,
+      name: f.name,
+      required: f.required,
+      schemaType: f.schema?.type,
+      allowedValues: f.allowedValues
+        ?.map((v) => v.value ?? v.name)
+        .filter((v): v is string => Boolean(v)),
+    }));
+  }
+
   async listLinkTypes(): Promise<JiraIssueLinkType[]> {
     const response = await this.makeRequest<{ issueLinkTypes: JiraIssueLinkType[] }>(
       '/issueLinkType'
@@ -1124,6 +1182,8 @@ export class JiraClient {
     labels?: string[];
     priority?: string;
     parentKey?: string;
+    components?: string[];
+    customFields?: Record<string, unknown>;
   }): Promise<{ id: string; key: string; self: string }> {
     const fields: Record<string, unknown> = {
       project: { key: input.projectKey },
@@ -1137,6 +1197,8 @@ export class JiraClient {
     if (input.labels) fields.labels = input.labels;
     if (input.priority) fields.priority = { name: input.priority };
     if (input.parentKey) fields.parent = { key: input.parentKey };
+    if (input.components) fields.components = input.components.map((name) => ({ name }));
+    if (input.customFields) Object.assign(fields, input.customFields);
 
     const url = `${this.config.baseUrl}/rest/api/2/issue`;
     const response = await fetch(url, {
@@ -1165,6 +1227,8 @@ export class JiraClient {
       assigneeAccountId?: string | null;
       labels?: string[];
       priority?: string;
+      components?: string[];
+      customFields?: Record<string, unknown>;
     }
   ): Promise<void> {
     const fields: Record<string, unknown> = {};
@@ -1179,6 +1243,8 @@ export class JiraClient {
     }
     if (input.labels !== undefined) fields.labels = input.labels;
     if (input.priority !== undefined) fields.priority = { name: input.priority };
+    if (input.components !== undefined) fields.components = input.components.map((name) => ({ name }));
+    if (input.customFields !== undefined) Object.assign(fields, input.customFields);
 
     if (Object.keys(fields).length === 0) {
       throw new Error('editIssue called with no fields to update.');

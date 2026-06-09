@@ -20,6 +20,8 @@ import { runProjects } from './commands/projects.js';
 import { runBoards } from './commands/boards.js';
 import { runSprints } from './commands/sprints.js';
 import { runIssueTypes } from './commands/issuetypes.js';
+import { runComponents } from './commands/components.js';
+import { runFields } from './commands/fields.js';
 import { runLinkTypes } from './commands/linktypes.js';
 import { runMe } from './commands/me.js';
 import { runFetch } from './commands/fetch.js';
@@ -598,6 +600,11 @@ function exitOnError(err: unknown): never {
   process.exit(1);
 }
 
+/** Commander collector for repeatable options (e.g. --field a=1 --field b=2). */
+function collect(value: string, previous: string[] = []): string[] {
+  return [...previous, value];
+}
+
 program
   .command('search <jql>')
   .description('Search issues by JQL (single page; pass --cursor for next page).')
@@ -716,6 +723,49 @@ Examples:
   );
 
 program
+  .command('components')
+  .description('List components defined on a project.')
+  .requiredOption('-o, --org <name>', 'Organization name')
+  .option('-P, --project <key>', 'Project key (defaults to org default)')
+  .option('--json', 'Output JSON instead of human-readable')
+  .action(async (opts: { org: string; project?: string; json?: boolean }) => {
+    try { await runComponents(opts); } catch (err) { exitOnError(err); }
+  })
+  .addHelpText(
+    'after',
+    `
+The "name" values are what \`jirallm create/edit --components\` expects.
+
+Examples:
+  $ jirallm components -o acme -P PROJ
+  $ jirallm components -o acme -P PROJ --json
+`
+  );
+
+program
+  .command('fields')
+  .description('List custom fields (and select options with --type) for use with --field.')
+  .requiredOption('-o, --org <name>', 'Organization name')
+  .option('-P, --project <key>', 'Project key (defaults to org default)')
+  .option('-t, --type <issueType>', 'Show create-screen fields + allowed values for this issue type')
+  .option('--json', 'Output JSON instead of human-readable')
+  .action(async (opts: { org: string; project?: string; type?: string; json?: boolean }) => {
+    try { await runFields(opts); } catch (err) { exitOnError(err); }
+  })
+  .addHelpText(
+    'after',
+    `
+The [customfield_NNNNN] ids are what \`jirallm create/edit --field\` expects.
+Add --type Bug to see valid select options (e.g. for Severity, Environment).
+
+Examples:
+  $ jirallm fields -o acme -P PROJ
+  $ jirallm fields -o acme -P PROJ --type Bug
+  $ jirallm fields -o acme -P PROJ --type Bug --json
+`
+  );
+
+program
   .command('linktypes')
   .description('List issue link types available in an org.')
   .requiredOption('-o, --org <name>', 'Organization name')
@@ -788,9 +838,15 @@ program
   .option('-l, --labels <list>', 'Comma-separated labels')
   .option('--priority <name>', 'Priority name (e.g. High)')
   .option('--parent <key>', 'Parent issue key (for subtasks / epic children)')
+  .option('--components <names>', 'Comma-separated component names')
+  .option(
+    '-F, --field <pair>',
+    'Set a custom field: friendlyName=value or customfield_NNNNN[:type]=value (repeatable)',
+    collect
+  )
   .option('--dry-run', 'Show what would be created without calling Jira')
   .option('--json', 'Output JSON instead of human-readable')
-  .action(async (opts: { org: string; project?: string; type: string; summary: string; description?: string; descriptionFile?: string; assignee?: string; labels?: string; priority?: string; parent?: string; dryRun?: boolean; json?: boolean }) => {
+  .action(async (opts: { org: string; project?: string; type: string; summary: string; description?: string; descriptionFile?: string; assignee?: string; labels?: string; priority?: string; parent?: string; components?: string; field?: string[]; dryRun?: boolean; json?: boolean }) => {
     try {
       await runCreate({
         org: opts.org,
@@ -803,6 +859,8 @@ program
         labels: opts.labels,
         priority: opts.priority,
         parent: opts.parent,
+        components: opts.components,
+        field: opts.field,
         dryRun: opts.dryRun,
         json: opts.json,
       });
@@ -812,14 +870,22 @@ program
     'after',
     `
 Run \`jirallm issuetypes -o <org>\` to discover valid --type values.
+Run \`jirallm components -o <org> -P <project>\` to discover valid --components names.
+Run \`jirallm fields -o <org> -P <project> --type Bug\` to discover custom field ids and select options.
 Get a user's accountId via \`jirallm me -o <org>\` (for the current user).
 --description is markdown; it gets converted to Jira wiki on the way in.
+
+Custom fields:
+  Friendly names defined under [orgs.<org>.export.custom_fields] resolve automatically
+  (e.g. --field severity=High shapes to the right payload from the configured type).
+  For ad-hoc fields use the raw id with an optional type: --field customfield_10050:select=High.
 
 Examples:
   $ jirallm create -o acme -t Task -s "Investigate flaky test"
   $ jirallm create -o acme -P PROJ -t Bug -s "Crash on save" --description-file ./repro.md
   $ jirallm create -o acme -t Story -s "Spike X" -l backend,p1 --priority High
   $ jirallm create -o acme -t Sub-task -s "Subtask of PROJ-1" --parent PROJ-1
+  $ jirallm create -o acme -t Bug -s "Crash" --components Web,API --field severity=High --field environment=PROD
   $ jirallm create -o acme -t Bug -s "test" --dry-run --json
 `
   );
@@ -835,21 +901,29 @@ program
   .option('--unassign', 'Unassign the issue (clears assignee)')
   .option('-l, --labels <list>', 'Comma-separated labels (replaces existing)')
   .option('--priority <name>', 'Priority name')
+  .option('--components <names>', 'Comma-separated component names (replaces existing)')
+  .option(
+    '-F, --field <pair>',
+    'Set a custom field: friendlyName=value or customfield_NNNNN[:type]=value (repeatable)',
+    collect
+  )
   .option('--dry-run', 'Show what would change without calling Jira')
   .option('--json', 'Output JSON instead of human-readable')
-  .action(async (issueKey: string, opts: { org?: string; summary?: string; description?: string; descriptionFile?: string; assignee?: string; unassign?: boolean; labels?: string; priority?: string; dryRun?: boolean; json?: boolean }) => {
+  .action(async (issueKey: string, opts: { org?: string; summary?: string; description?: string; descriptionFile?: string; assignee?: string; unassign?: boolean; labels?: string; priority?: string; components?: string; field?: string[]; dryRun?: boolean; json?: boolean }) => {
     try { await runEdit({ issueKey, ...opts }); } catch (err) { exitOnError(err); }
   })
   .addHelpText(
     'after',
     `
---labels REPLACES the existing label set; there is no add/remove syntax here.
+--labels and --components REPLACE the existing sets; there is no add/remove syntax here.
 --unassign and --assignee are mutually exclusive (use one).
+Custom fields work like \`create\`: --field friendlyName=value or --field customfield_NNNNN[:type]=value.
 
 Examples:
   $ jirallm edit PROJ-123 --summary "New title"
   $ jirallm edit PROJ-123 --description-file ./updated.md
   $ jirallm edit PROJ-123 --labels backend,p1 --priority High
+  $ jirallm edit PROJ-123 --components Web,API --field reproductionRate=Always
   $ jirallm edit PROJ-123 --assignee 5ac1234567890abcdef
   $ jirallm edit PROJ-123 --unassign --dry-run --json
 `
