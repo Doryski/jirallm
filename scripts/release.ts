@@ -40,8 +40,47 @@ const parseSemver = (tag: string) => {
   };
 };
 
-const bumpPatch = (v: { major: number; minor: number; patch: number }) =>
-  `v${v.major}.${v.minor}.${v.patch + 1}`;
+type BumpType = "major" | "minor" | "patch";
+
+const applyBump = (
+  v: { major: number; minor: number; patch: number },
+  type: BumpType,
+) => {
+  if (type === "major") return `v${v.major + 1}.0.0`;
+  if (type === "minor") return `v${v.major}.${v.minor + 1}.0`;
+  return `v${v.major}.${v.minor}.${v.patch + 1}`;
+};
+
+const getCommitsSince = (ref: string | null): string[] => {
+  try {
+    const range = ref ? `${ref}..HEAD` : "HEAD";
+    const out = sh(`git log ${range} --format=%B%x00`);
+    return out
+      ? out
+          .split("\0")
+          .map((msg) => msg.trim())
+          .filter(Boolean)
+      : [];
+  } catch {
+    return [];
+  }
+};
+
+// Derive the semver bump from conventional-commit messages since the last tag:
+// a `!`-marked type or a `BREAKING CHANGE:` footer → major, any `feat` → minor,
+// everything else (fix, chore, docs, …) → patch.
+const determineBump = (commits: string[]): BumpType => {
+  let bump: BumpType = "patch";
+  const subjectRe = /^(\w+)(?:\([^)]*\))?(!)?:/;
+  for (const msg of commits) {
+    const subject = msg.split("\n")[0];
+    const match = subjectRe.exec(subject);
+    const breaking = match?.[2] === "!" || /^BREAKING CHANGE:/m.test(msg);
+    if (breaking) return "major";
+    if (match?.[1] === "feat") bump = "minor";
+  }
+  return bump;
+};
 
 const stripV = (tag: string) => (tag.startsWith("v") ? tag.slice(1) : tag);
 
@@ -123,10 +162,16 @@ const main = async () => {
   const latest = tags.find((t) => parseSemver(t));
   const latestParsed = latest ? parseSemver(latest) : null;
 
+  const commitsSinceTag = getCommitsSince(latest ?? null);
+  const bumpType = determineBump(commitsSinceTag);
+
   const proposed = latestParsed
-    ? bumpPatch(latestParsed)
+    ? applyBump(latestParsed, bumpType)
     : `v${stripV(pkg.version)}`;
 
+  console.log(
+    `Commits since tag: ${commitsSinceTag.length} (${bumpType} bump)`,
+  );
   console.log(`Proposed new tag:  ${proposed}\n`);
 
   const interactive = stdin.isTTY === true;
