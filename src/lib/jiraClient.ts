@@ -81,10 +81,18 @@ type JiraChangelogHistory = {
 };
 
 type HistoryEntry = {
-  type: 'comment' | 'status_change';
+  type: 'comment' | 'status_change' | 'field_change';
   author: string;
   date: string;
   content: string;
+  field?: string;
+};
+
+export type WorklogSummary = {
+  author: string;
+  started: string;
+  timeSpent: string;
+  comment?: string;
 };
 
 export type JiraBoard = { id: number; name: string; type: string };
@@ -245,11 +253,17 @@ export type JiraTaskData = {
   customFields?: Record<string, unknown>;
   attachments: Array<{ id: string; filename: string; url: string; size: number }>;
   history: HistoryEntry[];
+  worklogs?: WorklogSummary[];
 };
 
 export type FetchIssueDetailsOptions = {
   jiraFieldIds?: string[];
   customFieldDefs?: CustomFieldDefs;
+  includeComments?: boolean;
+  includeChangelog?: boolean;
+  includeWorklog?: boolean;
+  includeLinks?: boolean;
+  fullChangelog?: boolean;
 };
 
 type JiraFieldMeta = {
@@ -572,7 +586,8 @@ export class JiraClient {
   private mergeHistory(
     comments: JiraComment[],
     changelog: JiraChangelogHistory[],
-    attachmentMetadata: Array<{ id: string; filename: string; url?: string }> = []
+    attachmentMetadata: Array<{ id: string; filename: string; url?: string }> = [],
+    fullChangelog = false
   ): HistoryEntry[] {
     const history: HistoryEntry[] = [];
 
@@ -586,13 +601,23 @@ export class JiraClient {
     }
 
     for (const change of changelog) {
-      const statusChange = change.items.find((item) => item.field === 'status');
-      if (statusChange) {
+      for (const item of change.items) {
+        if (item.field === 'status') {
+          history.push({
+            type: 'status_change',
+            author: change.author.displayName,
+            date: change.created,
+            content: `${item.fromString || 'None'} → ${item.toString}`,
+          });
+          continue;
+        }
+        if (!fullChangelog) continue;
         history.push({
-          type: 'status_change',
+          type: 'field_change',
+          field: item.field,
           author: change.author.displayName,
           date: change.created,
-          content: `${statusChange.fromString || 'None'} → ${statusChange.toString}`,
+          content: `${item.field}: ${item.fromString || 'None'} → ${item.toString || 'None'}`,
         });
       }
     }
@@ -652,16 +677,20 @@ export class JiraClient {
     const storyPointsFieldId =
       options.customFieldDefs?.storyPoints?.id ?? (await this.detectStoryPointsFieldId());
 
+    const includeComments = options.includeComments ?? true;
+    const includeChangelog = options.includeChangelog ?? true;
+
     const extraFields = options.jiraFieldIds ?? [];
     const fieldSet = new Set<string>([...baseFields, ...extraFields]);
     if (sprintFieldId) fieldSet.add(sprintFieldId);
     if (storyPointsFieldId) fieldSet.add(storyPointsFieldId);
+    if (options.includeLinks) fieldSet.add('issuelinks');
 
     const fields = [...fieldSet].join(',');
     const response = await this.makeRequest<JiraIssue>(`/issue/${issueKey}?fields=${fields}`);
 
-    const comments = await this.fetchIssueComments(issueKey);
-    const changelog = await this.fetchIssueChangelog(issueKey);
+    const comments = includeComments ? await this.fetchIssueComments(issueKey) : [];
+    const changelog = includeChangelog ? await this.fetchIssueChangelog(issueKey) : [];
 
     const attachmentMetadata =
       response.fields.attachment?.map((att) => ({
@@ -670,13 +699,22 @@ export class JiraClient {
         url: att.content,
       })) || [];
 
-    const history = this.mergeHistory(comments, changelog, attachmentMetadata);
+    const history = this.mergeHistory(
+      comments,
+      changelog,
+      attachmentMetadata,
+      options.fullChangelog ?? false
+    );
 
-    return this.buildTaskData(response, attachmentMetadata, history, {
+    const task = this.buildTaskData(response, attachmentMetadata, history, {
       sprintFieldId,
       storyPointsFieldId,
       customFieldDefs: options.customFieldDefs ?? {},
     });
+
+    if (options.includeWorklog) task.worklogs = await this.fetchIssueWorklogs(issueKey);
+
+    return task;
   }
 
   private buildTaskData(
@@ -827,6 +865,42 @@ export class JiraClient {
     } while (startAt < total);
 
     return allComments;
+  }
+
+  async fetchIssueWorklogs(issueKey: string): Promise<WorklogSummary[]> {
+    const worklogs: WorklogSummary[] = [];
+    const maxResults = 100;
+    let startAt = 0;
+    let total: number;
+
+    do {
+      const response = await this.makeRequest<{
+        worklogs: Array<{
+          author: { displayName: string };
+          started: string;
+          timeSpent: string;
+          comment?: string | JiraADFDocument;
+        }>;
+        total: number;
+        startAt: number;
+        maxResults: number;
+      }>(`/issue/${issueKey}/worklog?startAt=${startAt}&maxResults=${maxResults}`);
+
+      for (const worklog of response.worklogs) {
+        const entry: WorklogSummary = {
+          author: worklog.author.displayName,
+          started: worklog.started,
+          timeSpent: worklog.timeSpent,
+        };
+        if (worklog.comment) entry.comment = this.convertADFToMarkdown(worklog.comment);
+        worklogs.push(entry);
+      }
+
+      total = response.total;
+      startAt += response.maxResults;
+    } while (startAt < total);
+
+    return worklogs;
   }
 
   async fetchIssueChangelog(issueKey: string): Promise<JiraChangelogHistory[]> {

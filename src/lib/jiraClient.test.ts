@@ -390,3 +390,229 @@ describe('JiraClient.fetchIssueDetails — field mapping', () => {
     expect(issueCall).toContain('customfield_99999');
   });
 });
+
+const CHANGELOG_WITH_MIXED_ITEMS = {
+  changelog: {
+    histories: [
+      {
+        id: '1',
+        author: { displayName: 'Jane' },
+        created: '2026-05-20T10:00:00.000+0200',
+        items: [
+          { field: 'status', fromString: 'To Do', toString: 'In Progress' },
+          { field: 'assignee', fromString: null, toString: 'Jane' },
+          { field: 'priority', fromString: 'Low', toString: 'High' },
+        ],
+      },
+    ],
+  },
+};
+
+describe('JiraClient.fetchIssueDetails — changelog / mergeHistory', () => {
+  it('keeps only status_change entries when fullChangelog is false (default)', async () => {
+    installFetchSequence([
+      [],
+      makeIssueResponse({}),
+      { comments: [], total: 0, maxResults: 100, startAt: 0 },
+      CHANGELOG_WITH_MIXED_ITEMS,
+    ]);
+    const client = new JiraClient(FAKE_CONFIG, 'token');
+    const task = await client.fetchIssueDetails('PROJ-1');
+    expect(task.history).toEqual([
+      {
+        type: 'status_change',
+        author: 'Jane',
+        date: '2026-05-20T10:00:00.000+0200',
+        content: 'To Do → In Progress',
+      },
+    ]);
+  });
+
+  it('adds field_change entries with .field set when fullChangelog is true', async () => {
+    installFetchSequence([
+      [],
+      makeIssueResponse({}),
+      { comments: [], total: 0, maxResults: 100, startAt: 0 },
+      CHANGELOG_WITH_MIXED_ITEMS,
+    ]);
+    const client = new JiraClient(FAKE_CONFIG, 'token');
+    const task = await client.fetchIssueDetails('PROJ-1', { fullChangelog: true });
+    expect(task.history).toEqual([
+      {
+        type: 'status_change',
+        author: 'Jane',
+        date: '2026-05-20T10:00:00.000+0200',
+        content: 'To Do → In Progress',
+      },
+      {
+        type: 'field_change',
+        field: 'assignee',
+        author: 'Jane',
+        date: '2026-05-20T10:00:00.000+0200',
+        content: 'assignee: None → Jane',
+      },
+      {
+        type: 'field_change',
+        field: 'priority',
+        author: 'Jane',
+        date: '2026-05-20T10:00:00.000+0200',
+        content: 'priority: Low → High',
+      },
+    ]);
+  });
+});
+
+describe('JiraClient.fetchIssueDetails — network gating', () => {
+  function installUrlTracker(): { urls: string[] } {
+    const urls: string[] = [];
+    const fetchMock = vi.fn(async (url: string) => {
+      urls.push(url);
+      let body: unknown;
+      if (url.endsWith('/field')) body = [];
+      else if (url.includes('expand=changelog')) body = { changelog: { histories: [] } };
+      else if (url.includes('/comment')) body = { comments: [], total: 0, maxResults: 100, startAt: 0 };
+      else if (url.includes('/worklog')) body = { worklogs: [], total: 0, maxResults: 100, startAt: 0 };
+      else body = makeIssueResponse({});
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => body,
+      } as unknown as Response;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    return { urls };
+  }
+
+  it('fetches comments and changelog by default', async () => {
+    const { urls } = installUrlTracker();
+    const client = new JiraClient(FAKE_CONFIG, 'token');
+    await client.fetchIssueDetails('PROJ-1');
+    expect(urls.some((u) => u.includes('/comment'))).toBe(true);
+    expect(urls.some((u) => u.includes('expand=changelog'))).toBe(true);
+  });
+
+  it('skips comment and changelog requests when explicitly disabled', async () => {
+    const { urls } = installUrlTracker();
+    const client = new JiraClient(FAKE_CONFIG, 'token');
+    const task = await client.fetchIssueDetails('PROJ-1', {
+      includeComments: false,
+      includeChangelog: false,
+    });
+    expect(urls.some((u) => u.includes('/comment'))).toBe(false);
+    expect(urls.some((u) => u.includes('expand=changelog'))).toBe(false);
+    expect(task.history).toEqual([]);
+  });
+
+  it('adds issuelinks to the fields query when includeLinks is set', async () => {
+    const { urls } = installUrlTracker();
+    const client = new JiraClient(FAKE_CONFIG, 'token');
+    await client.fetchIssueDetails('PROJ-1', { includeLinks: true });
+    const issueCall = urls.find((u) => u.includes('/issue/PROJ-1?fields='));
+    expect(issueCall).toContain('issuelinks');
+  });
+
+  it('populates task.worklogs when includeWorklog is set', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      let body: unknown;
+      if (url.endsWith('/field')) body = [];
+      else if (url.includes('expand=changelog')) body = { changelog: { histories: [] } };
+      else if (url.includes('/comment')) body = { comments: [], total: 0, maxResults: 100, startAt: 0 };
+      else if (url.includes('/worklog')) {
+        body = {
+          worklogs: [
+            {
+              author: { displayName: 'Bob' },
+              started: '2026-05-21T09:00:00.000+0200',
+              timeSpent: '2h',
+            },
+          ],
+          total: 1,
+          maxResults: 100,
+          startAt: 0,
+        };
+      } else body = makeIssueResponse({});
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => body,
+      } as unknown as Response;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new JiraClient(FAKE_CONFIG, 'token');
+    const task = await client.fetchIssueDetails('PROJ-1', { includeWorklog: true });
+    expect(task.worklogs).toEqual([
+      { author: 'Bob', started: '2026-05-21T09:00:00.000+0200', timeSpent: '2h' },
+    ]);
+  });
+
+  it('leaves worklogs undefined when includeWorklog is not set', async () => {
+    installUrlTracker();
+    const client = new JiraClient(FAKE_CONFIG, 'token');
+    const task = await client.fetchIssueDetails('PROJ-1');
+    expect(task.worklogs).toBeUndefined();
+  });
+});
+
+describe('JiraClient.fetchIssueWorklogs', () => {
+  it('paginates and maps author/started/timeSpent/comment', async () => {
+    const pages = [
+      {
+        worklogs: [
+          {
+            author: { displayName: 'Alice' },
+            started: '2026-05-20T10:00:00.000+0200',
+            timeSpent: '1h',
+            comment: 'first log',
+          },
+          {
+            author: { displayName: 'Bob' },
+            started: '2026-05-20T11:00:00.000+0200',
+            timeSpent: '30m',
+          },
+        ],
+        total: 3,
+        startAt: 0,
+        maxResults: 2,
+      },
+      {
+        worklogs: [
+          {
+            author: { displayName: 'Carol' },
+            started: '2026-05-20T12:00:00.000+0200',
+            timeSpent: '45m',
+            comment: {
+              version: 1,
+              type: 'doc',
+              content: [
+                { type: 'paragraph', content: [{ type: 'text', text: 'adf comment' }] },
+              ],
+            },
+          },
+        ],
+        total: 3,
+        startAt: 2,
+        maxResults: 2,
+      },
+    ];
+    installFetchSequence([...pages]);
+    const client = new JiraClient(FAKE_CONFIG, 'token');
+    const worklogs = await client.fetchIssueWorklogs('PROJ-1');
+    expect(worklogs).toEqual([
+      {
+        author: 'Alice',
+        started: '2026-05-20T10:00:00.000+0200',
+        timeSpent: '1h',
+        comment: 'first log',
+      },
+      { author: 'Bob', started: '2026-05-20T11:00:00.000+0200', timeSpent: '30m' },
+      {
+        author: 'Carol',
+        started: '2026-05-20T12:00:00.000+0200',
+        timeSpent: '45m',
+        comment: 'adf comment\n',
+      },
+    ]);
+  });
+});

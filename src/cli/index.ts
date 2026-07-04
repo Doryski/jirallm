@@ -47,6 +47,8 @@ type ExportFlags = {
   includeSubtasks?: boolean;
   fields?: string;
   dryRun?: boolean;
+  withHistory?: boolean;
+  withWorklog?: boolean;
 };
 
 async function pickOrgInteractively(
@@ -206,6 +208,8 @@ async function runExport(rawArgs: string[], flags: ExportFlags): Promise<void> {
     fieldSelector,
     customFieldDefs,
     videoFrames: { enabled: videoEnabled, fps, maxFrames },
+    withHistory: flags.withHistory,
+    withWorklog: flags.withWorklog,
   });
 
   type Item = (typeof result.imported)[number];
@@ -252,23 +256,30 @@ if (!process.argv.includes('--json')) {
   });
 }
 
-program
-  .argument('[issue-keys...]', 'Jira issue keys, e.g. PROJ-123 or acme/PROJ-123')
-  .option('-o, --org <name>', 'Organization name from config (auto-resolved from issue prefix if unique)')
-  .option('-P, --project <key>', 'Project key override')
-  .option('--output-dir <path>', 'Output directory (default: ./jira-export)')
-  .option('--base-url <url>', 'Jira base URL (overrides config)')
-  .option('--user-email <email>', 'Jira user email (overrides config)')
-  .option('--api-token <token>', 'Jira API token (overrides keychain)')
-  .option('--no-video-frames', 'Disable video frame extraction')
-  .option('--fps <n>', 'Frame extraction FPS')
-  .option('--max-frames <n>', 'Max frames kept per video')
-  .option('--include-subtasks', 'Fetch and include subtask metadata')
-  .option(
-    '--fields <list>',
-    'Comma-separated friendly field names to include in frontmatter. Use +name/-name to add/remove, or "all" | "default" | "minimal".'
-  )
-  .option('--dry-run', 'Resolve config & print plan without calling Jira or writing files')
+function addExportOptions(cmd: Command): Command {
+  return cmd
+    .option('-o, --org <name>', 'Organization name from config (auto-resolved from issue prefix if unique)')
+    .option('-P, --project <key>', 'Project key override')
+    .option('--output-dir <path>', 'Output directory (default: ./jira-export)')
+    .option('--base-url <url>', 'Jira base URL (overrides config)')
+    .option('--user-email <email>', 'Jira user email (overrides config)')
+    .option('--api-token <token>', 'Jira API token (overrides keychain)')
+    .option('--no-video-frames', 'Disable video frame extraction')
+    .option('--fps <n>', 'Frame extraction FPS')
+    .option('--max-frames <n>', 'Max frames kept per video')
+    .option('--include-subtasks', 'Fetch and include subtask metadata')
+    .option(
+      '--fields <list>',
+      'Comma-separated friendly field names to include in frontmatter. Use +name/-name to add/remove, or "all" | "default" | "minimal".'
+    )
+    .option('--with-history', 'Include full field-change history (not just status changes)')
+    .option('--with-worklog', 'Include worklogs')
+    .option('--dry-run', 'Resolve config & print plan without calling Jira or writing files');
+}
+
+addExportOptions(
+  program.argument('[issue-keys...]', 'Jira issue keys, e.g. PROJ-123 or acme/PROJ-123')
+)
   .action(async (keys: string[], flags: ExportFlags) => {
     await runExport(keys, flags);
   })
@@ -284,6 +295,9 @@ Examples:
   $ jirallm PROJ-123 --fps 2 --max-frames 6
   $ jirallm PROJ-123 --include-subtasks
   $ jirallm --org acme PROJ-123
+  $ jirallm export PROJ-123
+  $ jirallm fetch PROJ-123 --with-comments --with-history
+  $ jirallm fetch PROJ-123 --full
   $ jirallm doctor --org acme
   $ jirallm setup
   $ jirallm orgs list
@@ -291,6 +305,12 @@ Examples:
 Run \`jirallm <command> --help\` for command-specific options.
 `
   );
+
+addExportOptions(program.command('export [issue-keys...]'))
+  .description('Export issues as LLM-ready context bundles (same as the default command).')
+  .action(async (keys: string[], flags: ExportFlags) => {
+    await runExport(keys, flags);
+  });
 
 program
   .command('init')
@@ -809,7 +829,14 @@ program
   .description('Fetch a single issue as JSON or pretty text (no file output).')
   .option('-o, --org <name>', 'Organization name override')
   .option('--json', 'Output JSON instead of human-readable')
-  .action(async (issueKey: string, opts: { org?: string; json?: boolean }) => {
+  .option('--with-comments', 'Include comments')
+  .option('--with-history', 'Include status + field-change history')
+  .option('--with-worklog', 'Include worklogs')
+  .option('--with-subtasks', 'Include subtask metadata')
+  .option('--with-links', 'Include issue links')
+  .option('--with-attachments', 'List attachment metadata (does not download)')
+  .option('--full', 'Include everything (comments, history, worklog, subtasks, links, attachments)')
+  .action(async (issueKey: string, opts: Omit<import('./commands/fetch.js').FetchOptions, 'issueKey'>) => {
     try { await runFetch({ issueKey, ...opts }); } catch (err) { exitOnError(err); }
   })
   .addHelpText(
@@ -821,6 +848,8 @@ use the default \`jirallm <key>\` command instead.
 Examples:
   $ jirallm fetch PROJ-123 --json
   $ jirallm fetch acme/PROJ-123
+  $ jirallm fetch PROJ-123 --with-comments --with-history
+  $ jirallm fetch PROJ-123 --full
   $ jirallm fetch PROJ-123 --json | jq .status
 `
   );

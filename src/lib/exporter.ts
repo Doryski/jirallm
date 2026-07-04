@@ -14,6 +14,8 @@ export type ExportOptions = {
   includeParentEpic?: boolean;
   fieldSelector?: FieldSelector;
   customFieldDefs?: CustomFieldDefs;
+  withHistory?: boolean;
+  withWorklog?: boolean;
   videoFrames?: {
     enabled: boolean;
     fps?: number;
@@ -221,6 +223,12 @@ function buildFrontmatterBlock(task: JiraTaskData, selectedKeys: Set<string>): s
   return body.startsWith('\n') ? body.slice(1) : body;
 }
 
+function historyLabel(entry: JiraTaskData['history'][number]): string {
+  if (entry.type === 'comment') return 'COMMENT';
+  if (entry.type === 'field_change') return `CHANGE (${entry.field})`;
+  return 'STATUS CHANGE';
+}
+
 function buildTaskMarkdown(
   task: JiraTaskData,
   taskDir: string,
@@ -236,10 +244,22 @@ function buildTaskMarkdown(
   if (task.history.length > 0) {
     md += `## History\n\n`;
     for (const entry of task.history) {
-      const label = entry.type === 'comment' ? 'COMMENT' : 'STATUS CHANGE';
+      const label = historyLabel(entry);
       const date = new Date(entry.date).toLocaleString();
       md += `---\n[${label}] ${entry.author} — ${date}:\n`;
       md += `${addFrameLinksToContent(entry.content, taskDir)}\n\n`;
+    }
+  }
+
+  if (task.worklogs?.length) {
+    md += `## Worklog\n\n`;
+    for (const worklog of task.worklogs) {
+      const date = new Date(worklog.started).toLocaleString();
+      md += `---\n[WORKLOG] ${worklog.author} — ${date}: ${worklog.timeSpent}\n`;
+      if (worklog.comment) {
+        md += `${addFrameLinksToContent(worklog.comment, taskDir)}\n`;
+      }
+      md += `\n`;
     }
   }
 
@@ -260,6 +280,8 @@ export class JiraExporter {
     const task = await this.client.fetchIssueDetails(issueKey, {
       jiraFieldIds: resolved.jiraFieldIds,
       customFieldDefs,
+      fullChangelog: options.withHistory ?? false,
+      includeWorklog: options.withWorklog ?? false,
     });
 
     if (options.includeSubtasks) {

@@ -17,9 +17,11 @@ import { loadProfile } from '../../lib/config.js';
 const loadProfileMock = vi.mocked(loadProfile);
 
 const fetchIssueDetailsMock = vi.fn();
+const fetchIssueSubtasksMock = vi.fn();
 vi.mock('../../lib/jiraClient.js', () => ({
   JiraClient: class {
     fetchIssueDetails = fetchIssueDetailsMock;
+    fetchIssueSubtasks = fetchIssueSubtasksMock;
   },
 }));
 
@@ -50,6 +52,8 @@ beforeEach(() => {
   vi.spyOn(process.stdout, 'write').mockImplementation((c) => { writes.push(String(c)); return true; });
   fetchIssueDetailsMock.mockReset();
   fetchIssueDetailsMock.mockResolvedValue(FAKE_DATA);
+  fetchIssueSubtasksMock.mockReset();
+  fetchIssueSubtasksMock.mockResolvedValue([]);
   loadProfileMock.mockClear();
 });
 
@@ -101,5 +105,92 @@ describe('runFetch', () => {
     expect(out).toContain('Sprint:   S42');
     expect(out).toContain('Labels:   a, b');
     expect(out).toContain('# body');
+  });
+
+  it('lean fetch (no flags) passes all include options off', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runFetch({ issueKey: 'PROJ-1', org: 'acme' });
+    expect(fetchIssueDetailsMock).toHaveBeenCalledWith('PROJ-1', {
+      includeComments: false,
+      includeChangelog: false,
+      fullChangelog: false,
+      includeWorklog: false,
+      includeLinks: false,
+    });
+    expect(fetchIssueSubtasksMock).not.toHaveBeenCalled();
+  });
+
+  it('--full turns every include option on and fetches subtasks', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runFetch({ issueKey: 'PROJ-1', org: 'acme', full: true });
+    expect(fetchIssueDetailsMock).toHaveBeenCalledWith('PROJ-1', {
+      includeComments: true,
+      includeChangelog: true,
+      fullChangelog: true,
+      includeWorklog: true,
+      includeLinks: true,
+    });
+    expect(fetchIssueSubtasksMock).toHaveBeenCalledWith('PROJ-1');
+  });
+
+  it('--full renders all pretty sections when data is present', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    fetchIssueDetailsMock.mockResolvedValue({
+      ...FAKE_DATA,
+      history: [
+        { type: 'comment', author: 'Al', date: '2026-01-01', content: 'a comment' },
+        { type: 'status_change', author: 'Bo', date: '2026-01-02', content: 'To Do → Done' },
+        { type: 'field_change', author: 'Cy', date: '2026-01-03', field: 'priority', content: 'priority: Low → High' },
+      ],
+      worklogs: [{ author: 'Wo', started: '2026-01-04', timeSpent: '1h', comment: 'did work' }],
+      issueLinks: [{ type: 'Blocks', key: 'PROJ-2', title: 'Other', status: 'Open' }],
+      attachments: [{ id: '1', filename: 'a.png', url: 'https://x/a.png', size: 42 }],
+    });
+    fetchIssueSubtasksMock.mockResolvedValue([{ key: 'PROJ-3', title: 'Sub', status: 'To Do' }]);
+    await runFetch({ issueKey: 'PROJ-1', org: 'acme', full: true });
+    const out = logs.join('\n');
+    expect(out).toContain('## Comments');
+    expect(out).toContain('a comment');
+    expect(out).toContain('## History');
+    expect(out).toContain('To Do → Done');
+    expect(out).toContain('priority: Low → High');
+    expect(out).toContain('## Worklog');
+    expect(out).toContain('did work');
+    expect(out).toContain('## Subtasks');
+    expect(out).toContain('PROJ-3');
+    expect(out).toContain('## Links');
+    expect(out).toContain('Blocks: PROJ-2');
+    expect(out).toContain('## Attachments');
+    expect(out).toContain('a.png');
+  });
+
+  it('renders only the sections whose flag is set', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    fetchIssueDetailsMock.mockResolvedValue({
+      ...FAKE_DATA,
+      history: [
+        { type: 'comment', author: 'Al', date: '2026-01-01', content: 'a comment' },
+        { type: 'status_change', author: 'Bo', date: '2026-01-02', content: 'To Do → Done' },
+      ],
+    });
+    await runFetch({ issueKey: 'PROJ-1', org: 'acme', withComments: true });
+    const out = logs.join('\n');
+    expect(out).toContain('## Comments');
+    expect(out).not.toContain('## History');
+    expect(out).not.toContain('## Worklog');
+    expect(out).not.toContain('## Subtasks');
+    expect(out).not.toContain('## Links');
+    expect(out).not.toContain('## Attachments');
+  });
+
+  it('still prints full data JSON in json mode with flags', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    const rich = { ...FAKE_DATA, worklogs: [{ author: 'Wo', started: 's', timeSpent: '1h' }] };
+    fetchIssueDetailsMock.mockResolvedValue(rich);
+    await runFetch({ issueKey: 'PROJ-1', org: 'acme', json: true, full: true });
+    expect(JSON.parse(writes.join(''))).toEqual({
+      ...rich,
+      subtasks: [],
+    });
   });
 });

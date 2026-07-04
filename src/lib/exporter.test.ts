@@ -247,4 +247,83 @@ describe('JiraExporter.exportIssue frontmatter', () => {
     expect(content).toMatch(/## History/);
     expect(content).toMatch(/\[COMMENT\] Jane/);
   });
+
+  it('renders STATUS CHANGE and CHANGE (field) labels in history', async () => {
+    const task: JiraTaskData = {
+      ...FULL_TASK,
+      history: [
+        {
+          type: 'status_change',
+          author: 'Bob',
+          date: '2026-05-22T10:00:00.000Z',
+          content: 'None → In Progress',
+        },
+        {
+          type: 'field_change',
+          field: 'priority',
+          author: 'Alice',
+          date: '2026-05-22T11:00:00.000Z',
+          content: 'priority: Low → High',
+        },
+      ],
+    };
+    const exporter = makeExporter(task);
+    await exporter.exportIssue('PROJ-1', { outputDir: tmpDir });
+    const content = readFileSync(join(tmpDir, 'proj-1', 'task.md'), 'utf-8');
+    expect(content).toMatch(/\[STATUS CHANGE\] Bob/);
+    expect(content).toMatch(/\[CHANGE \(priority\)\] Alice/);
+  });
+
+  it('renders a Worklog section when worklogs are present', async () => {
+    const task: JiraTaskData = {
+      ...FULL_TASK,
+      worklogs: [
+        {
+          author: 'Jane Doe',
+          started: '2026-05-22T10:00:00.000Z',
+          timeSpent: '2h',
+          comment: 'Worked on the thing',
+        },
+      ],
+    };
+    const exporter = makeExporter(task);
+    await exporter.exportIssue('PROJ-1', { outputDir: tmpDir });
+    const content = readFileSync(join(tmpDir, 'proj-1', 'task.md'), 'utf-8');
+    expect(content).toMatch(/## Worklog/);
+    expect(content).toMatch(/\[WORKLOG\] Jane Doe .*: 2h/);
+    expect(content).toMatch(/Worked on the thing/);
+  });
+
+  it('omits the Worklog section when no worklogs are present', async () => {
+    const exporter = makeExporter(FULL_TASK);
+    await exporter.exportIssue('PROJ-1', { outputDir: tmpDir });
+    const content = readFileSync(join(tmpDir, 'proj-1', 'task.md'), 'utf-8');
+    expect(content).not.toMatch(/## Worklog/);
+  });
+
+  it('forwards withHistory and withWorklog to fetchIssueDetails', async () => {
+    const exporter = makeExporter(FULL_TASK);
+    // @ts-expect-error accessing injected fake client
+    const fetchSpy = exporter.client.fetchIssueDetails;
+    await exporter.exportIssue('PROJ-1', {
+      outputDir: tmpDir,
+      withHistory: true,
+      withWorklog: true,
+    });
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'PROJ-1',
+      expect.objectContaining({ fullChangelog: true, includeWorklog: true })
+    );
+  });
+
+  it('defaults withHistory and withWorklog to false', async () => {
+    const exporter = makeExporter(FULL_TASK);
+    // @ts-expect-error accessing injected fake client
+    const fetchSpy = exporter.client.fetchIssueDetails;
+    await exporter.exportIssue('PROJ-1', { outputDir: tmpDir });
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'PROJ-1',
+      expect.objectContaining({ fullChangelog: false, includeWorklog: false })
+    );
+  });
 });
