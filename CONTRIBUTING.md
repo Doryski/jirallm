@@ -66,7 +66,7 @@ Set up credentials by running `node dist/cli/index.js init` (writes `~/.config/j
 Releases are automated via `.github/workflows/release.yml`, triggered when a `v*.*.*` tag is pushed.
 
 1. Update `CHANGELOG.md` — move entries from `[Unreleased]` into a new dated section, commit on the default branch
-2. Run `pnpm release` — the script (`scripts/release.ts`) bumps `package.json`, commits, creates the `vX.Y.Z` tag, and pushes both the branch and the tag
+2. Run `pnpm release` — this runs `doryski-release` (from the `@doryski/release` dev dependency), which bumps `package.json`, commits, creates the `vX.Y.Z` tag, and pushes both the branch and the tag to trigger the CI publish workflow
    - Defaults to a patch bump of the latest tag; pass `--release-version 1.2.0` for anything else
    - `--dry-run` previews without changes; `--yes` skips the confirmation prompt
 3. The release workflow then verifies the tag matches `package.json`, builds, runs tests via `prepublishOnly`, publishes to npm with provenance, and creates a GitHub Release with auto-generated notes
