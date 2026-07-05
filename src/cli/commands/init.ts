@@ -9,7 +9,7 @@ import {
   type VideoFramesConfig,
 } from '../../lib/config.js';
 import { setToken } from '../../lib/credentials.js';
-import { checkFFmpegInstalled } from '../../lib/videoFrameExtractor.js';
+import { checkFfmpeg } from 'framewise';
 import { detectOS, hasHomebrew } from '../../lib/platform.js';
 
 function exitIfCancelled<T>(value: T | symbol): T {
@@ -241,7 +241,7 @@ export async function runInit(): Promise<void> {
 }
 
 async function maybeOfferSetup(): Promise<void> {
-  if (await checkFFmpegInstalled()) return;
+  if (await checkFfmpeg()) return;
 
   note(
     'Video frames are enabled but ffmpeg was not found on your PATH.\n`jirallm setup` can install it for you.',

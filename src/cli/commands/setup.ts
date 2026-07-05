@@ -1,5 +1,5 @@
 import { intro, outro, confirm, note, isCancel, cancel } from '@clack/prompts';
-import { checkFFmpegInstalled, resolveFfmpegBinary } from '../../lib/videoFrameExtractor.js';
+import { checkFfmpeg, resolveFfmpegBinary } from 'framewise';
 import {
   detectJsPackageManagerFromUserAgent,
   detectOS,
@@ -95,7 +95,7 @@ export async function runSetup(opts: SetupOpts = {}): Promise<void> {
     return;
   }
 
-  if (await checkFFmpegInstalled()) {
+  if (await checkFfmpeg()) {
     outro('ffmpeg already installed. Nothing to do.');
     return;
   }
@@ -136,7 +136,7 @@ export async function runSetup(opts: SetupOpts = {}): Promise<void> {
   }
 
   // Re-verify
-  if (await checkFFmpegInstalled()) {
+  if (await checkFfmpeg()) {
     outro('ffmpeg installed successfully.');
     return;
   }

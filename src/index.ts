@@ -33,12 +33,8 @@ export { markdownToWiki } from './lib/markdownToWiki.js';
 export { splitIntoChunks } from './lib/chunkMarkdown.js';
 export { JiraExporter } from './lib/exporter.js';
 export type { ExportOptions, ExportResult } from './lib/exporter.js';
-export {
-  extractAndDeduplicateFrames,
-  checkFFmpegInstalled,
-  isVideoFile,
-} from './lib/videoFrameExtractor.js';
-export type { ExtractionOptions, ExtractionResult } from './lib/videoFrameExtractor.js';
+export { extractFrames, isVideoFile, checkFfmpeg } from 'framewise';
+export type { ExtractOptions, ExtractResult } from 'framewise';
 export {
   loadProfile,
   resolveConfigPath,

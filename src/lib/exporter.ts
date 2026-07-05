@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { JiraClient, type JiraConfig, type JiraTaskData } from './jiraClient.js';
-import { extractAndDeduplicateFrames, isVideoFile } from './videoFrameExtractor.js';
+import { extractFrames, isVideoFile } from 'framewise';
 import {
   resolveFieldSet,
   type CustomFieldDefs,
@@ -21,7 +21,6 @@ export type ExportOptions = {
     fps?: number;
     quality?: number;
     maxFrames?: number;
-    similarityThreshold?: number;
   };
 };
 
@@ -56,7 +55,6 @@ const DEFAULT_VIDEO_OPTS = {
   fps: 5,
   quality: 85,
   maxFrames: 10,
-  similarityThreshold: 0.0001,
 };
 
 function addFrameLinksToContent(content: string, taskDir: string): string {
@@ -335,30 +333,29 @@ export class JiraExporter {
           console.log(
             `  🎬 ${filename}: extracting frames (fps=${opts.fps}, max=${opts.maxFrames})...`
           );
-          const result = await extractAndDeduplicateFrames(attPath, framesDir, {
-            fps: opts.fps,
-            format: 'jpeg',
-            quality: opts.quality,
-            similarityThreshold: opts.similarityThreshold,
-            maxFrames: opts.maxFrames,
-          });
-
-          if (result.success) {
+          try {
+            const result = await extractFrames(attPath, framesDir, {
+              fps: opts.fps,
+              format: 'jpeg',
+              quality: opts.quality,
+              maxFrames: opts.maxFrames,
+            });
             console.log(
-              `  ✓ ${filename}: extracted ${result.frameCount} frames, kept ${result.dedupedCount}`
+              `  ✓ ${filename}: extracted ${result.extractedCount} frames, kept ${result.keptCount}`
             );
             videos.push({
               filename,
-              frameCount: result.frameCount,
-              dedupedCount: result.dedupedCount,
+              frameCount: result.extractedCount,
+              dedupedCount: result.keptCount,
             });
-          } else {
-            console.warn(`  ⚠ ${filename}: ${result.error}`);
+          } catch (error: unknown) {
+            const msg = error instanceof Error ? error.message : String(error);
+            console.warn(`  ⚠ ${filename}: ${msg}`);
             videos.push({
               filename,
               frameCount: 0,
               dedupedCount: 0,
-              error: result.error,
+              error: msg,
             });
           }
           processedVideos.add(`${task.key}:${att.id}`);

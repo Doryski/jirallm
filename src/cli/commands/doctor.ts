@@ -1,5 +1,5 @@
 import { intro, outro, note } from '@clack/prompts';
-import { checkFFmpegInstalled, resolveFfmpegBinary } from '../../lib/videoFrameExtractor.js';
+import { checkFfmpeg, resolveFfmpegBinary } from 'framewise';
 import { detectOS, getFfmpegInstallHint } from '../../lib/platform.js';
 import { readConfig, resolveConfigPath, loadProfile } from '../../lib/config.js';
 import { JiraClient } from '../../lib/jiraClient.js';
@@ -40,8 +40,8 @@ function checkNode(): CheckResult {
   };
 }
 
-async function checkFfmpeg(): Promise<CheckResult> {
-  if (await checkFFmpegInstalled()) {
+async function checkFfmpegStatus(): Promise<CheckResult> {
+  if (await checkFfmpeg()) {
     return { name: 'ffmpeg', severity: 'pass', detail: 'system ffmpeg available' };
   }
   const resolved = await resolveFfmpegBinary();
@@ -194,7 +194,7 @@ export async function runDoctor(opts: { org?: string; project?: string } = {}): 
 
   const results: CheckResult[] = [];
   results.push(checkNode());
-  results.push(await checkFfmpeg());
+  results.push(await checkFfmpegStatus());
   results.push(await checkKeychain());
   results.push(checkConfig());
   results.push(...(await checkJira(opts.org, opts.project)));

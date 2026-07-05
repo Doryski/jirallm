@@ -6,7 +6,6 @@ const videoFramesRawSchema = z
     fps: z.number().optional(),
     quality: z.number().optional(),
     max_frames: z.number().optional(),
-    similarity_threshold: z.number().optional(),
   })
   .strict();
 

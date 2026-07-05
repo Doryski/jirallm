@@ -12,7 +12,6 @@ export type VideoFramesConfig = {
   fps?: number;
   quality?: number;
   maxFrames?: number;
-  similarityThreshold?: number;
 };
 
 export type Project = {
@@ -97,7 +96,6 @@ function buildOrg(name: string, raw: RawConfig): Organization {
           fps: r.video_frames.fps,
           quality: r.video_frames.quality,
           maxFrames: r.video_frames.max_frames,
-          similarityThreshold: r.video_frames.similarity_threshold,
         }
       : undefined,
     export: r.export
@@ -192,7 +190,6 @@ function orgToRaw(org: Organization): RawOrg {
       fps: org.videoFrames.fps,
       quality: org.videoFrames.quality,
       max_frames: org.videoFrames.maxFrames,
-      similarity_threshold: org.videoFrames.similarityThreshold,
     };
   }
   if (org.export) {

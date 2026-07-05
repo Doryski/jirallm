@@ -1,13 +1,14 @@
-import { mkdtempSync, readFileSync, rmSync } from 'fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('./videoFrameExtractor.js', () => ({
-  isVideoFile: () => false,
-  extractAndDeduplicateFrames: vi.fn(),
+vi.mock('framewise', () => ({
+  isVideoFile: vi.fn(() => false),
+  extractFrames: vi.fn(),
 }));
 
+import { extractFrames, isVideoFile } from 'framewise';
 import { JiraExporter } from './exporter.js';
 import type { JiraTaskData } from './jiraClient.js';
 
@@ -58,15 +59,21 @@ beforeEach(() => {
 
 afterEach(() => {
   rmSync(tmpDir, { recursive: true, force: true });
+  vi.mocked(isVideoFile).mockReturnValue(false);
+  vi.mocked(extractFrames).mockReset();
 });
 
-function makeExporter(task: JiraTaskData): JiraExporter {
+function makeExporter(
+  task: JiraTaskData,
+  clientOverride?: Record<string, unknown>
+): JiraExporter {
   const exporter = new JiraExporter(FAKE_CONFIG, 'fake-token');
   // @ts-expect-error injecting fake client
   exporter.client = {
     fetchIssueDetails: vi.fn(async () => task),
     fetchIssueSubtasks: vi.fn(async () => []),
     downloadAttachment: vi.fn(async () => {}),
+    ...clientOverride,
   };
   return exporter;
 }
@@ -325,5 +332,101 @@ describe('JiraExporter.exportIssue frontmatter', () => {
       'PROJ-1',
       expect.objectContaining({ fullChangelog: false, includeWorklog: false })
     );
+  });
+});
+
+describe('JiraExporter video frame extraction', () => {
+  const VIDEO_TASK: JiraTaskData = {
+    ...FULL_TASK,
+    attachments: [{ id: '1', filename: 'demo.mp4', url: 'https://x.example/v', size: 1000 }],
+  };
+
+  function makeVideoExporter(task: JiraTaskData): JiraExporter {
+    return makeExporter(task, {
+      downloadAttachment: vi.fn(async (_url: string, attPath: string) => {
+        writeFileSync(attPath, 'x');
+      }),
+    });
+  }
+
+  it('extracts frames with default options and records the outcome', async () => {
+    vi.mocked(isVideoFile).mockReturnValue(true);
+    vi.mocked(extractFrames).mockResolvedValue({
+      outputDir: join(tmpDir, 'frames'),
+      frames: [],
+      extractedCount: 12,
+      keptCount: 4,
+      droppedDuplicates: 8,
+      droppedBlurry: 0,
+    });
+
+    const exporter = makeVideoExporter(VIDEO_TASK);
+    const outcome = await exporter.exportIssue('PROJ-1', {
+      outputDir: tmpDir,
+      videoFrames: { enabled: true },
+    });
+
+    expect(vi.mocked(extractFrames)).toHaveBeenCalledTimes(1);
+    const [attPath, , opts] = vi.mocked(extractFrames).mock.calls[0];
+    expect(attPath).toBe(join(tmpDir, 'proj-1', 'attachments', 'demo.mp4'));
+    expect(opts).toEqual(
+      expect.objectContaining({ fps: 5, format: 'jpeg', quality: 85, maxFrames: 10 })
+    );
+    expect(outcome.videos).toContainEqual({
+      filename: 'demo.mp4',
+      frameCount: 12,
+      dedupedCount: 4,
+    });
+  });
+
+  it('forwards custom video options, overriding defaults', async () => {
+    vi.mocked(isVideoFile).mockReturnValue(true);
+    vi.mocked(extractFrames).mockResolvedValue({
+      outputDir: join(tmpDir, 'frames'),
+      frames: [],
+      extractedCount: 3,
+      keptCount: 2,
+      droppedDuplicates: 1,
+      droppedBlurry: 0,
+    });
+
+    const exporter = makeVideoExporter(VIDEO_TASK);
+    await exporter.exportIssue('PROJ-1', {
+      outputDir: tmpDir,
+      videoFrames: { enabled: true, fps: 3, quality: 70, maxFrames: 5 },
+    });
+
+    const [, , opts] = vi.mocked(extractFrames).mock.calls[0];
+    expect(opts).toEqual(
+      expect.objectContaining({ fps: 3, quality: 70, maxFrames: 5, format: 'jpeg' })
+    );
+  });
+
+  it('records an error entry when extraction fails without throwing', async () => {
+    vi.mocked(isVideoFile).mockReturnValue(true);
+    vi.mocked(extractFrames).mockRejectedValue(new Error('ffmpeg exploded'));
+
+    const exporter = makeVideoExporter(VIDEO_TASK);
+    const outcome = await exporter.exportIssue('PROJ-1', {
+      outputDir: tmpDir,
+      videoFrames: { enabled: true },
+    });
+
+    expect(outcome.videos).toContainEqual({
+      filename: 'demo.mp4',
+      frameCount: 0,
+      dedupedCount: 0,
+      error: 'ffmpeg exploded',
+    });
+  });
+
+  it('does not extract frames when videoFrames is disabled', async () => {
+    vi.mocked(isVideoFile).mockReturnValue(true);
+
+    const exporter = makeVideoExporter(VIDEO_TASK);
+    const outcome = await exporter.exportIssue('PROJ-1', { outputDir: tmpDir });
+
+    expect(vi.mocked(extractFrames)).not.toHaveBeenCalled();
+    expect(outcome.videos).toEqual([]);
   });
 });
