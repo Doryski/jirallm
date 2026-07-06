@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
+import { realpathSync } from 'node:fs';
 import { Command, Option } from 'commander';
 import updateNotifier from 'update-notifier';
 import { JiraExporter } from '../lib/exporter.js';
@@ -1176,10 +1177,17 @@ Examples:
   return program;
 }
 
-const isDirectRun =
-  process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+function isRunAsEntry(): boolean {
+  const invoked = process.argv[1];
+  if (invoked === undefined) return false;
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(invoked)).href;
+  } catch {
+    return import.meta.url === pathToFileURL(invoked).href;
+  }
+}
 
-if (isDirectRun) {
+if (isRunAsEntry()) {
   buildProgram()
     .parseAsync(process.argv)
     .catch((error: unknown) => {
