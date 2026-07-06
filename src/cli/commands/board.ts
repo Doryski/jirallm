@@ -1,9 +1,10 @@
 import { loadProfile } from '../../lib/config.js';
 import { JiraClient } from '../../lib/jiraClient.js';
+import { printJson, shouldOutputJson } from '../jsonOutput.js';
 
 export type BoardIssuesOptions = {
   board: string;
-  column: string;
+  column?: string;
   org: string;
   project?: string;
   assignee?: string;
@@ -22,13 +23,30 @@ export async function runBoardIssues(opts: BoardIssuesOptions): Promise<void> {
   const profile = await loadProfile({ org: opts.org, project: opts.project });
   const client = new JiraClient(profile.config, profile.apiToken);
 
+  if (!opts.column) {
+    const columns = await client.getBoardColumnNames(opts.board);
+    if (shouldOutputJson(opts)) {
+      printJson({ board: opts.board, columns });
+      return;
+    }
+    if (columns.length === 0) {
+      console.log(`Board "${opts.board}" has no columns.`);
+      return;
+    }
+    console.log(`Board "${opts.board}" columns:`);
+    for (const name of columns) {
+      console.log(`  ${name}`);
+    }
+    return;
+  }
+
   const statusIds = await client.getBoardColumnStatusIds(opts.board, opts.column);
   if (statusIds.length === 0) {
-    if (opts.json) {
-      process.stdout.write('[]\n');
-    } else {
-      console.error(`Column "${opts.column}" has no mapped statuses.`);
+    if (shouldOutputJson(opts)) {
+      printJson([]);
+      return;
     }
+    console.error(`Column "${opts.column}" has no mapped statuses.`);
     return;
   }
 
@@ -65,8 +83,8 @@ export async function runBoardIssues(opts: BoardIssuesOptions): Promise<void> {
     };
   });
 
-  if (opts.json) {
-    process.stdout.write(JSON.stringify({ board: opts.board, column: opts.column, issues: rows }, null, 2) + '\n');
+  if (shouldOutputJson(opts)) {
+    printJson({ board: opts.board, column: opts.column, issues: rows });
     return;
   }
 

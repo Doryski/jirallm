@@ -1,4 +1,5 @@
-import { intro, outro, text, password, confirm, select, isCancel, cancel, note } from '@clack/prompts';
+import { intro, outro, text, password, confirm, select, multiselect, isCancel, cancel, note } from '@clack/prompts';
+import { readFileSync } from 'fs';
 import {
   resolveConfigPath,
   readConfig,
@@ -9,8 +10,18 @@ import {
   type VideoFramesConfig,
 } from '../../lib/config.js';
 import { setToken } from '../../lib/credentials.js';
+import { JiraClient, type JiraConfig } from '../../lib/jiraClient.js';
 import { checkFfmpeg } from 'framewise';
 import { detectOS, hasHomebrew } from '../../lib/platform.js';
+
+export type InitOptions = {
+  org?: string;
+  baseUrl?: string;
+  email?: string;
+  project?: string;
+  tokenStdin?: boolean;
+  yes?: boolean;
+};
 
 function exitIfCancelled<T>(value: T | symbol): T {
   if (isCancel(value)) {
@@ -200,7 +211,128 @@ async function promptProject(orgName: string, existingKeys: string[]): Promise<P
   return parsed.map((key) => ({ key, outputDir: dir }));
 }
 
-export async function runInit(): Promise<void> {
+function isNonInteractive(opts: InitOptions): boolean {
+  return Boolean(
+    opts.org || opts.baseUrl || opts.email || opts.project || opts.tokenStdin || opts.yes
+  );
+}
+
+function domainLabelFromEmail(email: string): string {
+  const domain = email.split('@')[1] ?? '';
+  return domain.split('.')[0] ?? '';
+}
+
+function defaultBaseUrl(domainLabel: string): string {
+  return `https://${domainLabel}.atlassian.net`;
+}
+
+function readTokenFromStdinOrEnv(opts: InitOptions): string {
+  if (opts.tokenStdin) {
+    const raw = readFileSync(0, 'utf-8').trim();
+    if (!raw) throw new Error('--token-stdin was set but no token was received on stdin.');
+    return raw;
+  }
+  const env = process.env.JIRALLM_API_TOKEN?.trim();
+  if (env) return env;
+  throw new Error(
+    'No API token provided. Pass --token-stdin (piping the token) or set JIRALLM_API_TOKEN.'
+  );
+}
+
+async function validateCredentials(config: JiraConfig, apiToken: string): Promise<void> {
+  const client = new JiraClient(config, apiToken);
+  await client.getCurrentUser();
+}
+
+function normalizeProjectKey(input: string): string {
+  const key = input.trim().toUpperCase();
+  if (!PROJECT_KEY_RE.test(key)) {
+    throw new Error(
+      `Invalid project key "${input}". Use uppercase letters, digits, _ (must start with a letter).`
+    );
+  }
+  return key;
+}
+
+export async function runInit(opts: InitOptions = {}): Promise<void> {
+  if (isNonInteractive(opts)) {
+    await runInitNonInteractive(opts);
+    return;
+  }
+  await runInitInteractive();
+}
+
+async function runInitNonInteractive(opts: InitOptions): Promise<void> {
+  const email = opts.email;
+  if (!email || !email.includes('@')) {
+    throw new Error('Non-interactive init requires a valid --email.');
+  }
+
+  const domainLabel = domainLabelFromEmail(email);
+  const orgName = opts.org ?? domainLabel;
+  if (!orgName || !ORG_NAME_RE.test(orgName)) {
+    throw new Error(
+      `Could not derive an organization name from "${email}". Pass --org explicitly (letters, digits, _, ., -).`
+    );
+  }
+
+  const baseUrl = opts.baseUrl ?? defaultBaseUrl(domainLabel);
+  if (!/^https?:\/\//.test(baseUrl)) {
+    throw new Error(`Invalid --base-url "${baseUrl}". Must start with http(s)://.`);
+  }
+
+  const projectKey = opts.project ? normalizeProjectKey(opts.project) : undefined;
+  const apiToken = readTokenFromStdinOrEnv(opts);
+
+  await validateCredentials({ baseUrl, userEmail: email }, apiToken);
+
+  const org: Organization = { name: orgName, baseUrl, userEmail: email, projects: {} };
+  await setToken(orgName, apiToken);
+  upsertOrg(org);
+
+  if (projectKey) upsertProject(orgName, { key: projectKey });
+
+  console.log(`Config saved to ${resolveConfigPath()}`);
+  const hint = projectKey ? `jirallm ${projectKey}-123` : `jirallm --org ${orgName} <ISSUE-KEY>`;
+  console.log(`Use it with: ${hint}`);
+}
+
+async function selectProjectsFromJira(
+  client: JiraClient,
+  orgName: string,
+  existingKeys: string[]
+): Promise<Project[]> {
+  let available: { key: string; name: string }[];
+  try {
+    const page = await client.listProjects({ limit: 100 });
+    available = page.values.filter((p) => !existingKeys.includes(p.key));
+  } catch {
+    available = [];
+  }
+
+  if (available.length === 0) return promptProject(orgName, existingKeys);
+
+  const selected = exitIfCancelled(
+    await multiselect({
+      message: `Select project(s) for "${orgName}"\n\x1b[2mDiscovered from your Jira workspace.\x1b[22m`,
+      options: available.map((p) => ({ value: p.key, label: `${p.key} — ${p.name}` })),
+      required: true,
+    })
+  ) as string[];
+
+  const outputDir = exitIfCancelled(
+    await text({
+      message:
+        'Default output directory for these projects (optional)\n\x1b[2mWhere exports for these projects will be written. Leave empty to choose per-export with `--output-dir`.\x1b[22m',
+      placeholder: './jira-export',
+    })
+  );
+
+  const dir = outputDir || undefined;
+  return selected.map((key) => ({ key, outputDir: dir }));
+}
+
+async function runInitInteractive(): Promise<void> {
   intro('jirallm init');
 
   const existing = readConfig();
@@ -208,10 +340,18 @@ export async function runInit(): Promise<void> {
   const { name: orgName, isNew } = await promptOrg(existingOrgNames);
 
   let newOrgVideoFrames: VideoFramesConfig | undefined;
+  let newOrgClient: JiraClient | undefined;
   if (isNew) {
     const { org, apiToken } = await promptOrgFields(orgName);
     newOrgVideoFrames = org.videoFrames;
-    upsertOrg(org);
+
+    try {
+      await validateCredentials({ baseUrl: org.baseUrl, userEmail: org.userEmail }, apiToken);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      cancel(`Could not authenticate with Jira: ${msg}\nNothing was saved.`);
+      process.exit(1);
+    }
 
     try {
       await setToken(orgName, apiToken);
@@ -222,12 +362,18 @@ export async function runInit(): Promise<void> {
         'Partial success'
       );
     }
+
+    upsertOrg(org);
+
+    newOrgClient = new JiraClient({ baseUrl: org.baseUrl, userEmail: org.userEmail }, apiToken);
   }
 
   const orgRaw = readConfig().orgs?.[orgName];
   const existingProjectKeys = Object.keys(orgRaw?.projects ?? {});
 
-  const projects = await promptProject(orgName, existingProjectKeys);
+  const projects = newOrgClient
+    ? await selectProjectsFromJira(newOrgClient, orgName, existingProjectKeys)
+    : await promptProject(orgName, existingProjectKeys);
   for (const p of projects) upsertProject(orgName, p);
 
   note(`Config saved to ${resolveConfigPath()}`, 'Done');

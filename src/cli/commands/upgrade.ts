@@ -8,7 +8,7 @@ export type InstallMethod =
   | { kind: 'homebrew' }
   | { kind: 'npm' | 'pnpm' | 'yarn' };
 
-export type UpgradeOpts = { yes?: boolean; check?: boolean };
+export type UpgradeOpts = { yes?: boolean; check?: boolean; json?: boolean };
 
 export function detectInstallMethod(
   binaryPath: string = process.argv[1] ?? '',
@@ -58,11 +58,15 @@ export async function runUpgrade(opts: UpgradeOpts = {}): Promise<void> {
 
   if (opts.check) {
     const latest = await fetchLatestVersion(name);
-    const upToDate = latest === version;
-    console.log(`Current: ${version}`);
-    console.log(`Latest:  ${latest}`);
-    console.log(upToDate ? 'Up to date.' : `Update available: ${version} → ${latest}`);
-    if (!upToDate) process.exit(1);
+    const outdated = latest !== version;
+    if (opts.json) {
+      console.log(JSON.stringify({ current: version, latest, outdated }));
+    } else {
+      console.log(`Current: ${version}`);
+      console.log(`Latest:  ${latest}`);
+      console.log(outdated ? `Update available: ${version} → ${latest}` : 'Up to date.');
+    }
+    if (outdated) process.exit(1);
     return;
   }
 

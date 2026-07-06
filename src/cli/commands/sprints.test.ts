@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const loadOrgProfileMock = vi.fn(async (..._args: unknown[]) => ({
+  config: { baseUrl: 'https://x', userEmail: 'u@x' },
+  org: { name: 'acme' },
+  apiToken: 'tok',
+}));
 vi.mock('../../lib/config.js', () => ({
-  loadProfile: vi.fn(async () => ({
-    config: { baseUrl: 'https://x', userEmail: 'u@x', projectKey: 'PROJ' },
-    project: { key: 'PROJ' },
-    apiToken: 'tok',
-  })),
+  loadOrgProfile: (...args: unknown[]) => loadOrgProfileMock(...args),
 }));
 
 const listSprintsMock = vi.fn();
@@ -42,6 +43,18 @@ describe('runSprints', () => {
     expect(listSprintsMock).toHaveBeenCalledWith(42, {
       state: 'active',
       limit: 10,
+      startAt: undefined,
+    });
+  });
+
+  it('loads org profile without a project (board id only)', async () => {
+    listSprintsMock.mockResolvedValue({ values: [], startAt: 0, maxResults: 50, isLast: true });
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runSprints({ boardId: '7', org: 'acme' });
+    expect(loadOrgProfileMock).toHaveBeenCalledWith({ org: 'acme' });
+    expect(listSprintsMock).toHaveBeenCalledWith(7, {
+      state: undefined,
+      limit: undefined,
       startAt: undefined,
     });
   });

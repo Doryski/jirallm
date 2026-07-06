@@ -1,9 +1,10 @@
 import { loadProfile } from '../../lib/config.js';
 import { JiraClient } from '../../lib/jiraClient.js';
+import { resolveOrg } from '../resolveOrg.js';
 import { printJson, shouldOutputJson } from '../jsonOutput.js';
 
 export type BoardsOptions = {
-  org: string;
+  org?: string;
   project?: string;
   type?: 'scrum' | 'kanban' | 'simple';
   name?: string;
@@ -12,17 +13,32 @@ export type BoardsOptions = {
   json?: boolean;
 };
 
-export async function runBoards(opts: BoardsOptions): Promise<void> {
-  const profile = await loadProfile({ org: opts.org, project: opts.project });
+async function fetchBoards(opts: BoardsOptions) {
+  const org = resolveOrg(undefined, opts.org, opts.project ?? '');
+  const profile = await loadProfile({ org, project: opts.project });
   const client = new JiraClient(profile.config, profile.apiToken);
 
-  const page = await client.listBoards({
+  return client.listBoards({
     projectKey: opts.project ?? profile.project.key,
     type: opts.type,
     name: opts.name,
     limit: opts.limit ? parseInt(opts.limit, 10) : undefined,
     startAt: opts.startAt ? parseInt(opts.startAt, 10) : undefined,
   });
+}
+
+export async function runBoards(opts: BoardsOptions): Promise<void> {
+  let page;
+  try {
+    page = await fetchBoards(opts);
+  } catch (error) {
+    if (shouldOutputJson(opts)) {
+      printJson({ error: error instanceof Error ? error.message : String(error) });
+      process.exitCode = 1;
+      return;
+    }
+    throw error;
+  }
 
   if (shouldOutputJson(opts)) {
     printJson(page);

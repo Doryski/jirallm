@@ -1,11 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../../lib/config.js', () => ({
-  loadProfile: vi.fn(async () => ({
-    config: { baseUrl: 'https://x', userEmail: 'u@x', projectKey: 'PROJ' },
-    project: { key: 'PROJ' },
+const { loadOrgProfileMock } = vi.hoisted(() => ({
+  loadOrgProfileMock: vi.fn(async () => ({
+    config: { baseUrl: 'https://x', userEmail: 'u@x' },
+    org: { name: 'acme' },
     apiToken: 'tok',
   })),
+}));
+vi.mock('../../lib/config.js', () => ({
+  loadOrgProfile: loadOrgProfileMock,
 }));
 
 const searchIssuesMock = vi.fn();
@@ -102,6 +105,30 @@ describe('runSearch', () => {
     searchIssuesMock.mockResolvedValue({ issues: [], isLast: true });
     await runSearch({ jql: 'x' });
     expect(logs.join('\n')).toContain('No matching issues.');
+  });
+
+  it('loads the profile without a project requirement', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: [], isLast: true });
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runSearch({ jql: 'x', org: 'acme' });
+    expect(loadOrgProfileMock).toHaveBeenCalledWith({ org: 'acme' });
+  });
+
+  it('accepts --next-page-token as an alias for --cursor', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: [], isLast: true });
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runSearch({ jql: 'x', nextPageToken: ' npt-1'.trim() });
+    expect(searchIssuesMock.mock.calls[0][1].nextPageToken).toBe('npt-1');
+  });
+
+  it('includes status in the human-readable rows', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runSearch({ jql: 'x' });
+    const out = logs.join('\n');
+    expect(out).toContain('PROJ-1');
+    expect(out).toMatch(/PROJ-1.*\(Open\)/);
+    expect(out).toMatch(/PROJ-2.*\(Done\)/);
   });
 
   it('prints cursor hint when more results available + TTY', async () => {

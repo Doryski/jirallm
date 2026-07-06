@@ -1,18 +1,20 @@
-import { loadProfile } from '../../lib/config.js';
+import { loadOrgProfile, resolveOptionalProjectKey } from '../../lib/config.js';
 import { JiraClient } from '../../lib/jiraClient.js';
+import { resolveOrg } from '../resolveOrg.js';
 import { printJson, shouldOutputJson } from '../jsonOutput.js';
 
 export type IssueTypesOptions = {
-  org: string;
+  org?: string;
   project?: string;
   json?: boolean;
 };
 
 export async function runIssueTypes(opts: IssueTypesOptions): Promise<void> {
-  const profile = await loadProfile({ org: opts.org, project: opts.project });
+  const org = resolveOrg(undefined, opts.org, opts.project ?? '');
+  const profile = await loadOrgProfile({ org });
   const client = new JiraClient(profile.config, profile.apiToken);
 
-  const projectKey = opts.project ?? profile.project.key;
+  const projectKey = resolveOptionalProjectKey(profile.org, opts.project);
   const types = await client.listIssueTypes(projectKey);
 
   if (shouldOutputJson(opts)) {

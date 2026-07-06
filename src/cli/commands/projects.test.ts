@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../lib/config.js', () => ({
-  loadProfile: vi.fn(async () => ({
-    config: { baseUrl: 'https://x', userEmail: 'u@x', projectKey: 'PROJ' },
-    project: { key: 'PROJ' },
+  loadOrgProfile: vi.fn(async () => ({
+    org: {
+      name: 'acme',
+      projects: { PROJ: { key: 'PROJ' }, DOCS: { key: 'DOCS' } },
+    },
+    config: { baseUrl: 'https://x', userEmail: 'u@x' },
     apiToken: 'tok',
   })),
 }));
@@ -15,7 +18,10 @@ vi.mock('../../lib/jiraClient.js', () => ({
   },
 }));
 
+import { loadOrgProfile } from '../../lib/config.js';
 import { runProjects } from './projects.js';
+
+const loadOrgProfileMock = vi.mocked(loadOrgProfile);
 
 let logs: string[];
 let writes: string[];
@@ -27,6 +33,7 @@ beforeEach(() => {
   vi.spyOn(console, 'log').mockImplementation((...a) => { logs.push(a.map(String).join(' ')); });
   vi.spyOn(process.stdout, 'write').mockImplementation((c) => { writes.push(String(c)); return true; });
   listProjectsMock.mockReset();
+  loadOrgProfileMock.mockClear();
 });
 
 afterEach(() => {
@@ -71,6 +78,22 @@ describe('runProjects', () => {
     expect(logs.join('\n')).toContain('PROJ');
     expect(logs.join('\n')).toContain('Proj');
     expect(logs.join('\n')).toContain('DOCS');
+  });
+
+  it('succeeds for a multi-project org with no -P (never requires a project)', async () => {
+    listProjectsMock.mockResolvedValue({
+      values: [
+        { id: '1', key: 'PROJ', name: 'Proj' },
+        { id: '2', key: 'DOCS', name: 'Docs' },
+      ],
+      startAt: 0,
+      maxResults: 50,
+      isLast: true,
+    });
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runProjects({ org: 'acme' });
+    expect(loadOrgProfileMock).toHaveBeenCalledWith({ org: 'acme' });
+    expect(logs.join('\n')).toContain('2 project(s):');
   });
 
   it('prints "No projects found." when empty', async () => {

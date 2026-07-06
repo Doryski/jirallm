@@ -1,11 +1,12 @@
 import { readFile } from 'node:fs/promises';
-import { loadProfile } from '../../lib/config.js';
+import { loadOrgProfile, resolveOptionalProjectKey } from '../../lib/config.js';
 import { JiraClient } from '../../lib/jiraClient.js';
 import { parseFieldFlags } from '../../lib/customFieldWrite.js';
+import { resolveAccountId } from '../resolveUser.js';
 import { printJson, shouldOutputJson } from '../jsonOutput.js';
 
 export type CreateOptions = {
-  org: string;
+  org?: string;
   projectKey?: string;
   type: string;
   summary: string;
@@ -22,8 +23,7 @@ export type CreateOptions = {
 };
 
 export async function runCreate(opts: CreateOptions): Promise<void> {
-  const profile = await loadProfile({ org: opts.org, project: opts.projectKey });
-  const projectKey = opts.projectKey ?? profile.project.key;
+  const profile = await loadOrgProfile({ org: opts.org });
 
   let descriptionMarkdown: string | undefined;
   if (opts.descriptionFile) {
@@ -36,12 +36,30 @@ export async function runCreate(opts: CreateOptions): Promise<void> {
   const components = opts.components?.split(',').map((s) => s.trim()).filter(Boolean);
   const customFields = parseFieldFlags(opts.field, profile.org?.export?.customFieldDefs);
 
+  const projectKey = resolveOptionalProjectKey(profile.org, opts.projectKey);
+  if (!projectKey) {
+    const keys = Object.keys(profile.org.projects).join(', ') || '(none)';
+    throw new Error(
+      `No project specified for org "${profile.org.name}". Pass --project. Available projects: ${keys}`
+    );
+  }
+
+  const client = new JiraClient(profile.config, profile.apiToken);
+
+  let assigneeAccountId: string | undefined;
+  let assigneeDisplayName: string | undefined;
+  if (opts.assignee) {
+    const resolved = await resolveAccountId(client, opts.assignee, { project: projectKey });
+    assigneeAccountId = resolved.accountId ?? undefined;
+    assigneeDisplayName = resolved.displayName ?? undefined;
+  }
+
   const input = {
     projectKey,
     issueType: opts.type,
     summary: opts.summary,
     descriptionMarkdown,
-    assigneeAccountId: opts.assignee,
+    assigneeAccountId,
     labels,
     priority: opts.priority,
     parentKey: opts.parent,
@@ -50,16 +68,16 @@ export async function runCreate(opts: CreateOptions): Promise<void> {
   };
 
   if (opts.dryRun) {
+    const preview = assigneeDisplayName ? { ...input, assigneeDisplayName } : input;
     if (shouldOutputJson(opts)) {
-      printJson({ dryRun: true, input });
+      printJson({ dryRun: true, input: preview });
     } else {
       console.log('Dry run — would create issue:');
-      console.log(JSON.stringify(input, null, 2));
+      console.log(JSON.stringify(preview, null, 2));
     }
     return;
   }
 
-  const client = new JiraClient(profile.config, profile.apiToken);
   const result = await client.createIssue(input);
 
   if (shouldOutputJson(opts)) {

@@ -215,6 +215,69 @@ describe('runWorklog (live posting)', () => {
   });
 });
 
+describe('runWorklog positional quick-log', () => {
+  it('builds a single-entry array from issueKey + duration (dry-run)', async () => {
+    setStdin('');
+    await runWorklog({ org: 'solo', issueKey: 'PROJ-9', duration: '45m', dryRun: true });
+    expect(addWorklogMock).not.toHaveBeenCalled();
+    expect(logs.join('\n')).toMatch(/1\/1 valid/);
+    expect(logs.join('\n')).toMatch(/PROJ-9.*45m/);
+  });
+
+  it('posts the quick-log entry live', async () => {
+    addWorklogMock.mockResolvedValueOnce({ id: '900', issueId: '9' });
+    setStdin('');
+    await runWorklog({ org: 'solo', issueKey: 'PROJ-9', duration: '1h' });
+    expect(addWorklogMock).toHaveBeenCalledTimes(1);
+    const [key, payload] = addWorklogMock.mock.calls[0];
+    expect(key).toBe('PROJ-9');
+    expect(payload.timeSpentSeconds).toBe(3600);
+    expect(logs.join('\n')).toMatch(/Summary: 1 posted, 0 failed/);
+  });
+});
+
+describe('runWorklog --json', () => {
+  it('emits dry-run JSON shape', async () => {
+    setStdin(
+      JSON.stringify([{ issueKey: 'PROJ-1', startTime: '2026-05-23T09:00:00Z', duration: '1h' }])
+    );
+    await runWorklog({ org: 'solo', dryRun: true, json: true });
+    expect(addWorklogMock).not.toHaveBeenCalled();
+    const out = JSON.parse(logs.join('\n'));
+    expect(out.dryRun).toBe(true);
+    expect(out.ok).toBe(true);
+    expect(out.worklogs).toHaveLength(1);
+    expect(out.worklogs[0]).toMatchObject({
+      index: 0,
+      org: 'solo',
+      issueKey: 'PROJ-1',
+      durationSeconds: 3600,
+    });
+    expect(out.worklogs[0].started).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it('emits live JSON shape with summary', async () => {
+    addWorklogMock.mockResolvedValueOnce({ id: '100', issueId: '1' });
+    setStdin(
+      JSON.stringify([{ issueKey: 'PROJ-1', startTime: '2026-05-23T09:00:00Z', duration: '1h' }])
+    );
+    await runWorklog({ org: 'solo', json: true });
+    const out = JSON.parse(logs.join('\n'));
+    expect(out.dryRun).toBe(false);
+    expect(out.ok).toBe(true);
+    expect(out.summary).toEqual({ posted: 1, failed: 0 });
+    expect(out.worklogs[0]).toMatchObject({ ok: true, id: '100', issueKey: 'PROJ-1' });
+  });
+
+  it('emits validation errors as JSON and aborts', async () => {
+    setStdin(JSON.stringify([{ issueKey: 'bad-key!', duration: '30m' }]));
+    await expect(runWorklog({ org: 'solo', json: true })).rejects.toThrow(/Aborting/);
+    const out = JSON.parse(logs.join('\n'));
+    expect(out.ok).toBe(false);
+    expect(out.errors[0].index).toBe(0);
+  });
+});
+
 describe('runWorklog input handling', () => {
   it('rejects empty input', async () => {
     setStdin('');

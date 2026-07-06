@@ -98,6 +98,21 @@ describe('validateWorklog', () => {
     ).toThrow(/at least 2/i);
   });
 
+  it('accepts duration-only and defaults started to now', () => {
+    const before = Date.now();
+    const v = validateWorklog({ ...base, duration: '1h' }, 0);
+    const after = Date.now();
+    expect(v.durationSeconds).toBe(3600);
+    expect(v.started.getTime()).toBeGreaterThanOrEqual(before);
+    expect(v.started.getTime()).toBeLessThanOrEqual(after);
+  });
+
+  it('rejects only one field when it is not a duration', () => {
+    expect(() =>
+      validateWorklog({ ...base, endTime: '2026-05-23T09:00:00Z' }, 0)
+    ).toThrow(/at least 2/i);
+  });
+
   it('rejects malformed issueKey', () => {
     expect(() => validateWorklog({ issueKey: 'not-a-key!', duration: '1h', startTime: '2026-05-23T09:00:00Z' }, 0)).toThrow();
   });

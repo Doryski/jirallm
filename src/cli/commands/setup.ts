@@ -11,7 +11,9 @@ import {
 } from '../../lib/platform.js';
 import { runInteractive } from '../../lib/runCommand.js';
 
-type SetupOpts = { bundled?: boolean; yes?: boolean };
+type SetupOpts = { bundled?: boolean; yes?: boolean; allowBrew?: boolean; dryRun?: boolean };
+
+type InstallPlan = { commands: string[]; message?: string };
 
 async function confirmStep(message: string, defaultYes: boolean): Promise<boolean> {
   const ok = await confirm({ message, initialValue: defaultYes });
@@ -61,7 +63,7 @@ async function installViaPackageManager(pm: PackageManager, opts: SetupOpts): Pr
   return runInteractive(cmd);
 }
 
-async function installHomebrew(): Promise<number> {
+async function installHomebrew(opts: SetupOpts): Promise<number> {
   const disclosure = [
     'Homebrew is not installed. The official installer:',
     '  • Downloads and runs a script from raw.githubusercontent.com/Homebrew',
@@ -73,8 +75,8 @@ async function installHomebrew(): Promise<number> {
   ].join('\n');
   note(disclosure, 'Homebrew install — read carefully');
 
-  // Homebrew install ALWAYS requires interactive consent — never auto via --yes.
-  if (!(await confirmStep('Install Homebrew now?', false))) {
+  // Homebrew install requires interactive consent unless explicitly opted in via --allow-brew.
+  if (!opts.allowBrew && !(await confirmStep('Install Homebrew now?', false))) {
     console.log('Skipped Homebrew install. See https://brew.sh for manual instructions.');
     return 1;
   }
@@ -85,7 +87,56 @@ async function installHomebrew(): Promise<number> {
   return code;
 }
 
+async function computeInstallPlan(opts: SetupOpts): Promise<InstallPlan> {
+  if (opts.bundled) return { commands: [detectGlobalInstaller()] };
+  if (await checkFfmpeg()) return { commands: [], message: 'ffmpeg already installed. Nothing to do.' };
+
+  const os = detectOS();
+
+  if (os === 'macos') {
+    const commands: string[] = [];
+    if (!(await hasHomebrew())) commands.push(HOMEBREW_INSTALL_CMD);
+    const cmd = ffmpegInstallCommand(await detectPackageManager());
+    if (cmd) commands.push(cmd);
+    return { commands };
+  }
+
+  if (os === 'linux') {
+    const pm = await detectPackageManager();
+    if (pm === 'none') {
+      return {
+        commands: [],
+        message:
+          'No supported package manager detected (apt/dnf/pacman). Install ffmpeg manually or use: jirallm setup --bundled',
+      };
+    }
+    const cmd = ffmpegInstallCommand(pm);
+    return { commands: cmd ? [cmd] : [] };
+  }
+
+  return {
+    commands: [],
+    message: 'Automatic install not supported on this OS. Install ffmpeg manually or use: jirallm setup --bundled',
+  };
+}
+
+async function printDryRun(opts: SetupOpts): Promise<void> {
+  intro('jirallm setup (dry run)');
+  const { commands, message } = await computeInstallPlan(opts);
+  if (commands.length > 0) {
+    note(commands.map((c) => `  ${c}`).join('\n'), 'Install plan — commands that would run');
+  } else if (message) {
+    note(message, 'Install plan');
+  }
+  outro('Dry run complete. No changes made.');
+}
+
 export async function runSetup(opts: SetupOpts = {}): Promise<void> {
+  if (opts.dryRun) {
+    await printDryRun(opts);
+    return;
+  }
+
   intro('jirallm setup');
 
   if (opts.bundled) {
@@ -104,7 +155,7 @@ export async function runSetup(opts: SetupOpts = {}): Promise<void> {
 
   if (os === 'macos') {
     if (!(await hasHomebrew())) {
-      const hbCode = await installHomebrew();
+      const hbCode = await installHomebrew(opts);
       if (hbCode !== 0) {
         note(
           'You can also use the bundled fallback:\n  jirallm setup --bundled',

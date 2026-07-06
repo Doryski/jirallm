@@ -1,10 +1,12 @@
 import { readFileSync } from 'fs';
 import { loadProfile } from '../../lib/config.js';
-import { JiraClient } from '../../lib/jiraClient.js';
+import { JiraClient, type JiraComment } from '../../lib/jiraClient.js';
 import { markdownToWiki } from '../../lib/markdownToWiki.js';
 import { splitIntoChunks } from '../../lib/chunkMarkdown.js';
 import { parseIssueKey } from '../issueKey.js';
 import { resolveOrg } from '../resolveOrg.js';
+import { printJson, shouldOutputJson } from '../jsonOutput.js';
+import { confirmOrAbort } from '../confirm.js';
 
 export type CommentOptions = {
   file?: string;
@@ -15,9 +17,33 @@ export type CommentOptions = {
   dryRun?: boolean;
   replyTo?: string;
   noThread?: boolean;
+  json?: boolean;
+};
+
+export type DeleteCommentOptions = {
+  org?: string;
+  dryRun?: boolean;
+  yes?: boolean;
+  json?: boolean;
+};
+
+export type CommentListOptions = {
+  org?: string;
+  json?: boolean;
 };
 
 const DEFAULT_MAX_CHARS = 25000;
+
+function buildHeader(index: number, total: number, rootId?: string): string {
+  if (total <= 1) return '';
+  if (index === 0) return `_Part 1/${total}${rootId ? ' (reply)' : ''}._\n\n`;
+  return `_Part ${index + 1}/${total}._\n\n`;
+}
+
+function commentSnippet(client: JiraClient, comment: JiraComment, max = 200): string {
+  const text = client.convertADFToMarkdown(comment.body).replace(/\s+/g, ' ').trim();
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
 
 export async function runComment(issueKeyArg: string, opts: CommentOptions): Promise<void> {
   const parsed = parseIssueKey(issueKeyArg);
@@ -40,48 +66,128 @@ export async function runComment(issueKeyArg: string, opts: CommentOptions): Pro
   const rawChunks = splitIntoChunks(rawBody, maxChars);
   const chunks = opts.noWiki ? rawChunks : rawChunks.map((c) => markdownToWiki(c));
 
-  console.log(`Posting ${chunks.length} comment(s) to ${parsed.key} on ${org}...`);
-
+  const asJson = shouldOutputJson(opts);
   const thread = !opts.noThread;
-  let prevId: string | undefined = opts.replyTo;
   const rootId = opts.replyTo;
-  for (let i = 0; i < chunks.length; i++) {
-    const header =
-      chunks.length > 1
-        ? i === 0
-          ? `_Część 1/${chunks.length}${rootId ? ` (replika)` : ''}._\n\n`
-          : `_Część ${i + 1}/${chunks.length}._\n\n`
-        : '';
-    const fullBody = header + chunks[i];
-    const parentId = thread ? prevId : rootId;
 
-    if (opts.dryRun) {
-      console.log(
-        `--- chunk ${i + 1}/${chunks.length} (${fullBody.length} chars)${parentId ? ` reply→${parentId}` : ''} ---`
-      );
-      console.log(fullBody.slice(0, 300) + (fullBody.length > 300 ? '\n...' : ''));
-      continue;
+  if (opts.dryRun) {
+    const previews = chunks.map((chunk, i) => {
+      const fullBody = buildHeader(i, chunks.length, rootId) + chunk;
+      return { index: i + 1, total: chunks.length, chars: fullBody.length, parent: rootId, body: fullBody };
+    });
+    if (asJson) {
+      printJson({ dryRun: true, issueKey: parsed.key, org, chunks: previews });
+      return;
     }
+    console.log(`Posting ${chunks.length} comment(s) to ${parsed.key} on ${org}...`);
+    for (const p of previews) {
+      console.log(
+        `--- chunk ${p.index}/${p.total} (${p.chars} chars)${p.parent ? ` reply→${p.parent}` : ''} ---`
+      );
+      console.log(p.body.slice(0, 300) + (p.body.length > 300 ? '\n...' : ''));
+    }
+    console.log('(dry-run — no comments posted)');
+    return;
+  }
 
+  if (!asJson) console.log(`Posting ${chunks.length} comment(s) to ${parsed.key} on ${org}...`);
+
+  const posted: Array<{ id: string; index: number; parent?: string }> = [];
+  let prevId: string | undefined = opts.replyTo;
+  for (let i = 0; i < chunks.length; i++) {
+    const fullBody = buildHeader(i, chunks.length, rootId) + chunks[i];
+    const parentId = thread ? prevId : rootId;
     const result = await client.addComment(parsed.key, fullBody, parentId);
-    console.log(
-      `  ✓ Posted comment ${i + 1}/${chunks.length} (id=${result.id}${parentId ? `, parent=${parentId}` : ''})`
-    );
+    posted.push({ id: result.id, index: i + 1, parent: parentId });
+    if (!asJson) {
+      console.log(
+        `  ✓ Posted comment ${i + 1}/${chunks.length} (id=${result.id}${parentId ? `, parent=${parentId}` : ''})`
+      );
+    }
     prevId = result.id;
   }
 
-  if (opts.dryRun) console.log('(dry-run — no comments posted)');
+  if (asJson) printJson({ issueKey: parsed.key, org, posted });
 }
 
-export async function runDeleteComment(
+export async function runCommentList(
   issueKeyArg: string,
-  commentId: string,
-  opts: { org?: string }
+  opts: CommentListOptions
 ): Promise<void> {
   const parsed = parseIssueKey(issueKeyArg);
   const org = resolveOrg(parsed.org, opts.org, parsed.projectKey);
   const profile = await loadProfile({ org, project: parsed.projectKey });
   const client = new JiraClient(profile.config, profile.apiToken);
+
+  const comments = await client.fetchIssueComments(parsed.key);
+
+  if (shouldOutputJson(opts)) {
+    printJson({
+      issueKey: parsed.key,
+      comments: comments.map((c) => ({
+        id: c.id,
+        author: c.author.displayName,
+        created: c.created,
+        snippet: commentSnippet(client, c),
+      })),
+    });
+    return;
+  }
+
+  if (comments.length === 0) {
+    console.log(`${parsed.key} has no comments.`);
+    return;
+  }
+
+  console.log(`${parsed.key} comments (${comments.length}):`);
+  for (const c of comments) {
+    console.log(
+      `  ${c.id.padEnd(10)}  ${c.author.displayName.padEnd(20)}  ${commentSnippet(client, c, 80)}`
+    );
+  }
+}
+
+export async function runDeleteComment(
+  issueKeyArg: string,
+  commentId: string,
+  opts: DeleteCommentOptions
+): Promise<void> {
+  const parsed = parseIssueKey(issueKeyArg);
+  const org = resolveOrg(parsed.org, opts.org, parsed.projectKey);
+  const profile = await loadProfile({ org, project: parsed.projectKey });
+  const client = new JiraClient(profile.config, profile.apiToken);
+
+  const comment = await client.getComment(parsed.key, commentId);
+  const snippet = commentSnippet(client, comment);
+  const asJson = shouldOutputJson(opts);
+
+  if (opts.dryRun) {
+    if (asJson) {
+      printJson({
+        dryRun: true,
+        issueKey: parsed.key,
+        id: comment.id,
+        author: comment.author.displayName,
+        body: snippet,
+      });
+      return;
+    }
+    console.log(`Dry run — would delete comment ${comment.id} from ${parsed.key}:`);
+    console.log(`  author: ${comment.author.displayName}`);
+    console.log(`  ${snippet}`);
+    return;
+  }
+
+  console.log(`Comment ${comment.id} by ${comment.author.displayName}:`);
+  console.log(`  ${snippet}`);
+  const confirmed = await confirmOrAbort(`Delete comment ${comment.id} from ${parsed.key}?`, {
+    yes: opts.yes,
+  });
+  if (!confirmed) {
+    console.log('Aborted — no comment deleted.');
+    return;
+  }
+
   await client.deleteComment(parsed.key, commentId);
   console.log(`Deleted comment ${commentId} from ${parsed.key}`);
 }

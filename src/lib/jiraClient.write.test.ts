@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -391,12 +391,358 @@ describe('JiraClient.uploadAttachment', () => {
   });
 });
 
+describe('JiraClient.resolveTransition', () => {
+  it('matches to.name case-insensitively and returns id/name/toName', async () => {
+    const { client, calls } = captureFetch(() => ({
+      json: {
+        transitions: [
+          { id: '11', name: 'Start Progress', to: { id: '3', name: 'In Progress' } },
+          { id: '21', name: 'Done', to: { id: '5', name: 'Done' } },
+        ],
+      },
+    }));
+    const resolved = await client.resolveTransition('PROJ-1', 'in progress');
+    expect(resolved).toEqual({ id: '11', name: 'Start Progress', toName: 'In Progress' });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].method).toBe('GET');
+  });
+
+  it('falls back to matching transition name when no to.name matches', async () => {
+    const { client } = captureFetch(() => ({
+      json: {
+        transitions: [{ id: '31', name: 'Reopen', to: { id: '1', name: 'To Do' } }],
+      },
+    }));
+    const resolved = await client.resolveTransition('PROJ-1', 'REOPEN');
+    expect(resolved.id).toBe('31');
+    expect(resolved.toName).toBe('To Do');
+  });
+
+  it('throws with available transitions when none match', async () => {
+    const { client } = captureFetch(() => ({
+      json: { transitions: [{ id: '1', name: 'Done', to: { id: '5', name: 'Done' } }] },
+    }));
+    await expect(client.resolveTransition('PROJ-1', 'Nope')).rejects.toThrow(/No transition/);
+  });
+});
+
+describe('JiraClient.transitionIssue', () => {
+  it('resolves and POSTs the transition by default', async () => {
+    const { client, calls } = captureFetch((url) => {
+      if (url.includes('/transitions')) {
+        return {
+          json: {
+            transitions: [{ id: '11', name: 'Go', to: { id: '3', name: 'In Progress' } }],
+          },
+        };
+      }
+      return { json: {} };
+    });
+    const result = await client.transitionIssue('PROJ-1', 'In Progress');
+    expect(result).toEqual({ id: '11', name: 'Go' });
+    const post = calls.find((c) => c.method === 'POST');
+    expect(post).toBeDefined();
+    expect((post!.body as { transition: { id: string } }).transition.id).toBe('11');
+  });
+
+  it('does NOT POST when dryRun is set but still returns the resolved transition', async () => {
+    const { client, calls } = captureFetch(() => ({
+      json: {
+        transitions: [{ id: '11', name: 'Go', to: { id: '3', name: 'In Progress' } }],
+      },
+    }));
+    const result = await client.transitionIssue('PROJ-1', 'in progress', { dryRun: true });
+    expect(result).toEqual({ id: '11', name: 'Go' });
+    expect(calls.every((c) => c.method === 'GET')).toBe(true);
+    expect(calls.some((c) => c.method === 'POST')).toBe(false);
+  });
+});
+
+describe('JiraClient.getAttachmentMeta', () => {
+  it('GETs /attachment/{id} and flattens author displayName', async () => {
+    const { client, calls } = captureFetch(() => ({
+      json: {
+        id: 'att-1',
+        filename: 'file.pdf',
+        size: 1234,
+        mimeType: 'application/pdf',
+        author: { displayName: 'Alice' },
+      },
+    }));
+    const meta = await client.getAttachmentMeta('att-1');
+    expect(calls[0].method).toBe('GET');
+    expect(calls[0].url).toContain('/rest/api/3/attachment/att-1');
+    expect(meta).toEqual({
+      id: 'att-1',
+      filename: 'file.pdf',
+      size: 1234,
+      mimeType: 'application/pdf',
+      author: 'Alice',
+    });
+  });
+
+  it('leaves author undefined when absent', async () => {
+    const { client } = captureFetch(() => ({
+      json: { id: 'att-2', filename: 'x.txt', size: 10 },
+    }));
+    const meta = await client.getAttachmentMeta('att-2');
+    expect(meta.author).toBeUndefined();
+    expect(meta.mimeType).toBeUndefined();
+  });
+});
+
 describe('JiraClient.deleteAttachment', () => {
   it('DELETEs /attachment/{id}', async () => {
     const { client, calls } = captureFetch(() => ({ status: 204 }));
     await client.deleteAttachment('att-9');
     expect(calls[0].method).toBe('DELETE');
     expect(calls[0].url).toContain('/rest/api/3/attachment/att-9');
+  });
+});
+
+describe('JiraClient.addComment', () => {
+  it('POSTs /rest/api/2/issue/{key}/comment and returns the new id', async () => {
+    const { client, calls } = captureFetch(() => ({ json: { id: '30001' } }));
+    const result = await client.addComment('PROJ-1', 'hello *wiki*');
+    expect(result).toEqual({ id: '30001' });
+    expect(calls[0].method).toBe('POST');
+    expect(calls[0].url).toBe('https://example.atlassian.net/rest/api/2/issue/PROJ-1/comment');
+    expect(calls[0].body).toEqual({ body: 'hello *wiki*' });
+  });
+
+  it('includes parentId when replying to a comment', async () => {
+    const { client, calls } = captureFetch(() => ({ json: { id: '30002' } }));
+    await client.addComment('PROJ-1', 'reply', 'c-parent');
+    expect(calls[0].body).toEqual({ body: 'reply', parentId: 'c-parent' });
+  });
+
+  it('throws a descriptive error on non-OK', async () => {
+    const { client } = captureFetch(() => ({
+      ok: false,
+      status: 400,
+      statusText: 'Bad Request',
+      text: 'bad body',
+    }));
+    await expect(client.addComment('PROJ-1', 'x')).rejects.toThrow(
+      /addComment failed: 400 Bad Request\nbad body/
+    );
+  });
+});
+
+describe('JiraClient.addWorklog', () => {
+  it('POSTs /rest/api/2/issue/{key}/worklog and returns id/issueId', async () => {
+    const { client, calls } = captureFetch(() => ({ json: { id: 'w-1', issueId: '10000' } }));
+    const result = await client.addWorklog('PROJ-1', {
+      started: '2026-01-01T09:00:00.000+0000',
+      timeSpentSeconds: 3600,
+      comment: 'worked',
+    });
+    expect(result).toEqual({ id: 'w-1', issueId: '10000' });
+    expect(calls[0].method).toBe('POST');
+    expect(calls[0].url).toBe('https://example.atlassian.net/rest/api/2/issue/PROJ-1/worklog');
+    expect(calls[0].body).toEqual({
+      started: '2026-01-01T09:00:00.000+0000',
+      timeSpentSeconds: 3600,
+      comment: 'worked',
+    });
+  });
+
+  it('throws a descriptive error on non-OK', async () => {
+    const { client } = captureFetch(() => ({
+      ok: false,
+      status: 403,
+      statusText: 'Forbidden',
+      text: 'no worklog',
+    }));
+    await expect(
+      client.addWorklog('PROJ-1', { started: 's', timeSpentSeconds: 60 })
+    ).rejects.toThrow(/addWorklog failed: 403 Forbidden\nno worklog/);
+  });
+});
+
+describe('JiraClient.deleteComment', () => {
+  it('DELETEs /rest/api/2/issue/{key}/comment/{id} and tolerates 204', async () => {
+    const { client, calls } = captureFetch(() => ({ status: 204 }));
+    await client.deleteComment('PROJ-1', 'c-9');
+    expect(calls[0].method).toBe('DELETE');
+    expect(calls[0].url).toContain('/rest/api/2/issue/PROJ-1/comment/c-9');
+  });
+
+  it('throws a descriptive error on non-OK', async () => {
+    const { client } = captureFetch(() => ({
+      ok: false,
+      status: 404,
+      statusText: 'Not Found',
+      text: 'gone',
+    }));
+    await expect(client.deleteComment('PROJ-1', 'c-9')).rejects.toThrow(
+      /deleteComment failed: 404 Not Found\ngone/
+    );
+  });
+});
+
+describe('JiraClient — write method error paths', () => {
+  it('transitionIssue throws when the POST fails', async () => {
+    const { client } = captureFetch((url, init) => {
+      if (url.includes('/transitions') && (init?.method ?? 'GET') === 'GET') {
+        return {
+          json: { transitions: [{ id: '11', name: 'Go', to: { id: '3', name: 'In Progress' } }] },
+        };
+      }
+      return { ok: false, status: 500, statusText: 'Server Error', text: 'transition boom' };
+    });
+    await expect(client.transitionIssue('PROJ-1', 'In Progress')).rejects.toThrow(
+      /transition failed: 500 Server Error/
+    );
+  });
+
+  it('assignIssue throws on non-OK, non-204', async () => {
+    const { client } = captureFetch(() => ({
+      ok: false,
+      status: 400,
+      statusText: 'Bad Request',
+      text: 'bad account',
+    }));
+    await expect(client.assignIssue('PROJ-1', 'acc-1')).rejects.toThrow(
+      /assignIssue failed: 400 Bad Request\nbad account/
+    );
+  });
+
+  it('linkIssues throws on non-OK, non-201', async () => {
+    const { client } = captureFetch(() => ({
+      ok: false,
+      status: 404,
+      statusText: 'Not Found',
+      text: 'no such link type',
+    }));
+    await expect(client.linkIssues('PROJ-1', 'PROJ-2', 'Blocks')).rejects.toThrow(
+      /linkIssues failed: 404 Not Found\nno such link type/
+    );
+  });
+
+  it('removeIssueLink throws on non-OK, non-204', async () => {
+    const { client } = captureFetch(() => ({
+      ok: false,
+      status: 404,
+      statusText: 'Not Found',
+      text: 'missing',
+    }));
+    await expect(client.removeIssueLink('l-1')).rejects.toThrow(
+      /removeIssueLink failed: 404 Not Found\nmissing/
+    );
+  });
+
+  it('addWatcher throws on non-OK, non-204', async () => {
+    const { client } = captureFetch(() => ({
+      ok: false,
+      status: 400,
+      statusText: 'Bad Request',
+      text: 'bad watcher',
+    }));
+    await expect(client.addWatcher('PROJ-1', 'acc-1')).rejects.toThrow(
+      /addWatcher failed: 400 Bad Request\nbad watcher/
+    );
+  });
+
+  it('removeWatcher throws on non-OK, non-204', async () => {
+    const { client } = captureFetch(() => ({
+      ok: false,
+      status: 404,
+      statusText: 'Not Found',
+      text: 'not watching',
+    }));
+    await expect(client.removeWatcher('PROJ-1', 'acc-1')).rejects.toThrow(
+      /removeWatcher failed: 404 Not Found\nnot watching/
+    );
+  });
+
+  it('uploadAttachment throws a descriptive error on non-OK', async () => {
+    const tmp = await mkdtemp(join(tmpdir(), 'jirallm-upload-err-'));
+    const file = join(tmp, 'f.txt');
+    await writeFile(file, 'x');
+    const { client } = captureFetch(() => ({
+      ok: false,
+      status: 413,
+      statusText: 'Payload Too Large',
+      text: 'too big',
+    }));
+    await expect(client.uploadAttachment('PROJ-1', file)).rejects.toThrow(
+      /uploadAttachment failed: 413 Payload Too Large\ntoo big/
+    );
+    await rm(tmp, { recursive: true, force: true });
+  });
+
+  it('deleteAttachment throws on non-OK, non-204', async () => {
+    const { client } = captureFetch(() => ({
+      ok: false,
+      status: 403,
+      statusText: 'Forbidden',
+      text: 'denied',
+    }));
+    await expect(client.deleteAttachment('att-1')).rejects.toThrow(
+      /deleteAttachment failed: 403 Forbidden\ndenied/
+    );
+  });
+});
+
+describe('JiraClient.downloadAttachment', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'jirallm-download-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('streams the response body into the output file', async () => {
+    const { Readable } = await import('node:stream');
+    const urls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        urls.push(url);
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          body: Readable.from([Buffer.from('file-contents')]),
+        } as unknown as Response;
+      })
+    );
+    const out = join(tmpDir, 'nested', 'out.bin');
+    const client = new JiraClient(FAKE_CONFIG, 'token');
+    await client.downloadAttachment('https://x/attachment/content/1', out);
+    expect(urls[0]).toBe('https://x/attachment/content/1');
+    const written = await readFile(out, 'utf8');
+    expect(written).toBe('file-contents');
+  });
+
+  it('throws when the download response is not OK', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        return { ok: false, status: 404, statusText: 'Not Found' } as unknown as Response;
+      })
+    );
+    const client = new JiraClient(FAKE_CONFIG, 'token');
+    await expect(
+      client.downloadAttachment('https://x/1', join(tmpDir, 'a.bin'))
+    ).rejects.toThrow(/Failed to download attachment: 404 Not Found/);
+  });
+
+  it('throws when the response body is null', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        return { ok: true, status: 200, statusText: 'OK', body: null } as unknown as Response;
+      })
+    );
+    const client = new JiraClient(FAKE_CONFIG, 'token');
+    await expect(
+      client.downloadAttachment('https://x/1', join(tmpDir, 'b.bin'))
+    ).rejects.toThrow(/Response body is null/);
   });
 });
 

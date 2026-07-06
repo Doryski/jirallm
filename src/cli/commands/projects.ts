@@ -1,4 +1,4 @@
-import { loadProfile } from '../../lib/config.js';
+import { loadOrgProfile } from '../../lib/config.js';
 import { JiraClient } from '../../lib/jiraClient.js';
 import { printJson, shouldOutputJson } from '../jsonOutput.js';
 
@@ -11,7 +11,7 @@ export type ProjectsOptions = {
 };
 
 export async function runProjects(opts: ProjectsOptions): Promise<void> {
-  const profile = await loadProfile({ org: opts.org });
+  const profile = await loadOrgProfile({ org: opts.org });
   const client = new JiraClient(profile.config, profile.apiToken);
 
   const page = await client.listProjects({

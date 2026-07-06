@@ -1,7 +1,8 @@
 import { loadProfile } from '../../lib/config.js';
 import { JiraClient } from '../../lib/jiraClient.js';
-import { parseIssueKey } from '../issueKey.js';
+import { parseIssueKeyArgs } from '../issueKey.js';
 import { resolveOrg } from '../resolveOrg.js';
+import { resolveAccountId } from '../resolveUser.js';
 import { printJson, shouldOutputJson } from '../jsonOutput.js';
 
 export type AssignOptions = {
@@ -13,33 +14,38 @@ export type AssignOptions = {
 };
 
 export async function runAssign(opts: AssignOptions): Promise<void> {
-  const parsed = parseIssueKey(opts.issueKey);
+  const parsed = parseIssueKeyArgs([opts.issueKey]);
   const org = resolveOrg(parsed.org, opts.org, parsed.projectKey);
   const profile = await loadProfile({ org, project: parsed.projectKey });
   const client = new JiraClient(profile.config, profile.apiToken);
 
-  let accountId: string | null;
-  if (opts.assignee === 'none' || opts.assignee === '-') {
-    accountId = null;
-  } else if (opts.assignee === 'me') {
-    const me = await client.getCurrentUser();
-    accountId = me.accountId;
-  } else {
-    accountId = opts.assignee;
-  }
+  const { accountId, displayName } = await resolveAccountId(client, opts.assignee, {
+    project: parsed.projectKey,
+    allowUnassign: true,
+  });
+  const label = displayName ?? accountId ?? 'nobody';
+  const results = parsed.keys.map((issueKey) => ({ issueKey, accountId, displayName }));
 
   if (opts.dryRun) {
-    const payload = { dryRun: true, issueKey: parsed.key, accountId };
-    if (shouldOutputJson(opts)) printJson(payload);
-    else console.log(`Dry run — would assign ${parsed.key} to ${accountId ?? 'none'}`);
+    if (shouldOutputJson(opts)) {
+      printJson({ dryRun: true, results });
+      return;
+    }
+    for (const issueKey of parsed.keys) {
+      console.log(`Dry run — would assign ${issueKey} to ${label}`);
+    }
     return;
   }
 
-  await client.assignIssue(parsed.key, accountId);
+  for (const issueKey of parsed.keys) {
+    await client.assignIssue(issueKey, accountId);
+  }
 
   if (shouldOutputJson(opts)) {
-    printJson({ issueKey: parsed.key, accountId });
+    printJson({ results });
     return;
   }
-  console.log(`✓ ${parsed.key} assigned to ${accountId ?? 'nobody'}`);
+  for (const issueKey of parsed.keys) {
+    console.log(`✓ ${issueKey} assigned to ${label}`);
+  }
 }

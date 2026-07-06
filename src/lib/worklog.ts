@@ -119,8 +119,9 @@ export function validateWorklog(entry: unknown, index: number): ValidatedWorklog
   const hasStart = entry.startTime !== undefined && entry.startTime !== null;
   const hasEnd = entry.endTime !== undefined && entry.endTime !== null;
   const hasDur = entry.duration !== undefined && entry.duration !== null;
+  const durationOnly = hasDur && !hasStart && !hasEnd;
   const present = [hasStart, hasEnd, hasDur].filter(Boolean).length;
-  if (present < 2) {
+  if (present < 2 && !durationOnly) {
     throw new Error(
       `at least 2 of startTime/endTime/duration are required (got ${present})`
     );
@@ -134,7 +135,7 @@ export function validateWorklog(entry: unknown, index: number): ValidatedWorklog
     if (typeof entry.startTime !== 'string') throw new Error(`"startTime" must be a string`);
     started = parseDate(entry.startTime, 'startTime');
   } else {
-    started = new Date(0);
+    started = durationOnly ? new Date() : new Date(0);
   }
   if (hasEnd) {
     if (typeof entry.endTime !== 'string') throw new Error(`"endTime" must be a string`);

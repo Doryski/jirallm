@@ -4,6 +4,7 @@ import { JiraClient } from '../../lib/jiraClient.js';
 import { parseFieldFlags } from '../../lib/customFieldWrite.js';
 import { parseIssueKey } from '../issueKey.js';
 import { resolveOrg } from '../resolveOrg.js';
+import { resolveAccountId } from '../resolveUser.js';
 import { printJson, shouldOutputJson } from '../jsonOutput.js';
 
 export type EditOptions = {
@@ -27,6 +28,8 @@ export async function runEdit(opts: EditOptions): Promise<void> {
   const org = resolveOrg(parsed.org, opts.org, parsed.projectKey);
   const profile = await loadProfile({ org, project: parsed.projectKey });
 
+  const client = new JiraClient(profile.config, profile.apiToken);
+
   let descriptionMarkdown: string | undefined;
   if (opts.descriptionFile) {
     descriptionMarkdown = await readFile(opts.descriptionFile, 'utf8');
@@ -34,9 +37,19 @@ export async function runEdit(opts: EditOptions): Promise<void> {
     descriptionMarkdown = opts.description;
   }
 
-  const assigneeAccountId: string | null | undefined = opts.unassign
-    ? null
-    : opts.assignee;
+  let assigneeAccountId: string | null | undefined;
+  let assigneeDisplayName: string | undefined;
+  if (opts.unassign) {
+    assigneeAccountId = null;
+  } else if (opts.assignee !== undefined) {
+    const resolved = await resolveAccountId(client, opts.assignee, {
+      issueKey: parsed.key,
+      project: parsed.projectKey,
+      allowUnassign: true,
+    });
+    assigneeAccountId = resolved.accountId;
+    assigneeDisplayName = resolved.displayName;
+  }
   const labels = opts.labels?.split(',').map((s) => s.trim()).filter(Boolean);
   const components = opts.components?.split(',').map((s) => s.trim()).filter(Boolean);
   const customFields = parseFieldFlags(opts.field, profile.org?.export?.customFieldDefs);
@@ -52,16 +65,17 @@ export async function runEdit(opts: EditOptions): Promise<void> {
   };
 
   if (opts.dryRun) {
+    const dryRunFields =
+      assigneeDisplayName !== undefined ? { ...fields, assigneeDisplayName } : fields;
     if (shouldOutputJson(opts)) {
-      printJson({ dryRun: true, issueKey: parsed.key, fields });
+      printJson({ dryRun: true, issueKey: parsed.key, fields: dryRunFields });
     } else {
       console.log(`Dry run — would edit ${parsed.key}:`);
-      console.log(JSON.stringify(fields, null, 2));
+      console.log(JSON.stringify(dryRunFields, null, 2));
     }
     return;
   }
 
-  const client = new JiraClient(profile.config, profile.apiToken);
   await client.editIssue(parsed.key, fields);
 
   if (shouldOutputJson(opts)) {

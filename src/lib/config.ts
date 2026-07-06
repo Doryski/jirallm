@@ -41,6 +41,12 @@ export type ResolvedProfile = {
   apiToken: string;
 };
 
+export type OrgProfile = {
+  config: JiraConfig;
+  org: Organization;
+  apiToken: string;
+};
+
 export type LoadProfileOptions = {
   org?: string;
   project?: string;
@@ -116,9 +122,10 @@ function buildOrg(name: string, raw: RawConfig): Organization {
 
 function pickProject(org: Organization, projectKey?: string): Project {
   if (!projectKey) {
-    const keys = Object.keys(org.projects).join(', ') || '(none)';
+    const keys = Object.keys(org.projects);
+    if (keys.length === 1) return org.projects[keys[0]];
     throw new Error(
-      `No project specified for org "${org.name}". Available projects: ${keys}`
+      `No project specified for org "${org.name}". Pass --project. Available projects: ${keys.join(', ') || '(none)'}`
     );
   }
   const project = org.projects[projectKey];
@@ -129,6 +136,16 @@ function pickProject(org: Organization, projectKey?: string): Project {
     );
   }
   return project;
+}
+
+export function resolveOptionalProjectKey(
+  org: Organization,
+  projectKey?: string
+): string | undefined {
+  if (projectKey) return pickProject(org, projectKey).key;
+  const keys = Object.keys(org.projects);
+  if (keys.length === 1) return keys[0];
+  return undefined;
 }
 
 export function listOrgs(raw: RawConfig = readConfig()): string[] {
@@ -146,7 +163,9 @@ export function findOrgsByProjectKey(
   return matches;
 }
 
-export async function loadProfile(opts: LoadProfileOptions = {}): Promise<ResolvedProfile> {
+export async function loadOrgProfile(
+  opts: { org?: string; configPath?: string } = {}
+): Promise<OrgProfile> {
   const path = opts.configPath ?? resolveConfigPath();
   const raw = readConfig(path);
 
@@ -159,13 +178,28 @@ export async function loadProfile(opts: LoadProfileOptions = {}): Promise<Resolv
   }
 
   const org = buildOrg(orgName, raw);
-  const project = pickProject(org, opts.project);
   const apiToken = await getToken(orgName);
   if (!apiToken) {
     throw new Error(
       `No API token found for org "${orgName}". Run \`jirallm auth set --org ${orgName}\`.`
     );
   }
+  return {
+    org,
+    apiToken,
+    config: {
+      baseUrl: org.baseUrl,
+      userEmail: org.userEmail,
+    },
+  };
+}
+
+export async function loadProfile(opts: LoadProfileOptions = {}): Promise<ResolvedProfile> {
+  const { org, apiToken } = await loadOrgProfile({
+    org: opts.org,
+    configPath: opts.configPath,
+  });
+  const project = pickProject(org, opts.project);
   return {
     org,
     project,

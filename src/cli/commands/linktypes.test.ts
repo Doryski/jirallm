@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const loadOrgProfileMock = vi.fn(async () => ({
+  org: { name: 'acme', projects: {} },
+  config: { baseUrl: 'https://x', userEmail: 'u@x' },
+  apiToken: 'tok',
+}));
 vi.mock('../../lib/config.js', () => ({
-  loadProfile: vi.fn(async () => ({
-    config: { baseUrl: 'https://x', userEmail: 'u@x', projectKey: 'PROJ' },
-    apiToken: 'tok',
-  })),
+  loadOrgProfile: (...args: unknown[]) => loadOrgProfileMock(...(args as [])),
 }));
 
 const listLinkTypesMock = vi.fn();
@@ -26,6 +28,7 @@ beforeEach(() => {
   vi.spyOn(console, 'log').mockImplementation((...a) => { logs.push(a.map(String).join(' ')); });
   vi.spyOn(process.stdout, 'write').mockImplementation((c) => { writes.push(String(c)); return true; });
   listLinkTypesMock.mockReset();
+  loadOrgProfileMock.mockClear();
 });
 
 afterEach(() => {
@@ -59,5 +62,14 @@ describe('runLinkTypes', () => {
     Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
     await runLinkTypes({ org: 'acme' });
     expect(logs.join('\n')).toContain('No link types defined.');
+  });
+
+  it('works without a project via loadOrgProfile', async () => {
+    listLinkTypesMock.mockResolvedValue([
+      { id: '1', name: 'Blocks', inward: 'is blocked by', outward: 'blocks' },
+    ]);
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runLinkTypes({ org: 'acme' });
+    expect(loadOrgProfileMock).toHaveBeenCalledWith({ org: 'acme' });
   });
 });

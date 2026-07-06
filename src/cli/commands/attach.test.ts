@@ -1,8 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('fs/promises', () => ({ stat: vi.fn() }));
+
 vi.mock('../../lib/config.js', () => ({
   loadProfile: vi.fn(async () => ({
     config: { baseUrl: 'https://x', userEmail: 'u@x', projectKey: 'PROJ' },
+    apiToken: 'tok',
+  })),
+  loadOrgProfile: vi.fn(async () => ({
+    config: { baseUrl: 'https://x', userEmail: 'u@x' },
     apiToken: 'tok',
   })),
   findOrgsByProjectKey: vi.fn(() => ['solo']),
@@ -10,14 +16,21 @@ vi.mock('../../lib/config.js', () => ({
 
 const uploadAttachmentMock = vi.fn();
 const deleteAttachmentMock = vi.fn();
+const getAttachmentMetaMock = vi.fn();
+const fetchIssueDetailsMock = vi.fn();
 vi.mock('../../lib/jiraClient.js', () => ({
   JiraClient: class {
     uploadAttachment = uploadAttachmentMock;
     deleteAttachment = deleteAttachmentMock;
+    getAttachmentMeta = getAttachmentMetaMock;
+    fetchIssueDetails = fetchIssueDetailsMock;
   },
 }));
 
+import { stat } from 'fs/promises';
 import { runAttach, runAttachRemove } from './attach.js';
+
+const statMock = stat as unknown as ReturnType<typeof vi.fn>;
 
 let logs: string[];
 let writes: string[];
@@ -30,6 +43,10 @@ beforeEach(() => {
   vi.spyOn(process.stdout, 'write').mockImplementation((c) => { writes.push(String(c)); return true; });
   uploadAttachmentMock.mockReset();
   deleteAttachmentMock.mockReset();
+  getAttachmentMetaMock.mockReset();
+  fetchIssueDetailsMock.mockReset();
+  statMock.mockReset();
+  statMock.mockResolvedValue({ isFile: () => true });
 });
 
 afterEach(() => {
@@ -56,7 +73,7 @@ describe('runAttach', () => {
     expect(parsed.attachments).toHaveLength(2);
   });
 
-  it('does NOT call uploadAttachment on --dry-run', async () => {
+  it('does NOT call uploadAttachment on --dry-run and reports the resolved org', async () => {
     Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
     await runAttach({
       issueKey: 'PROJ-1',
@@ -65,8 +82,26 @@ describe('runAttach', () => {
       json: true,
     });
     expect(uploadAttachmentMock).not.toHaveBeenCalled();
+    expect(statMock).toHaveBeenCalledWith('./a.png');
     const parsed = JSON.parse(writes.join(''));
-    expect(parsed).toEqual({ dryRun: true, issueKey: 'PROJ-1', files: ['./a.png'] });
+    expect(parsed).toEqual({ dryRun: true, org: 'solo', issueKey: 'PROJ-1', files: ['./a.png'] });
+  });
+
+  it('shows the resolved org in the human-readable --dry-run output', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runAttach({ issueKey: 'PROJ-1', files: ['./a.png'], dryRun: true });
+    const out = logs.join('\n');
+    expect(out).toContain('in org "solo"');
+    expect(out).toContain('./a.png');
+  });
+
+  it('errors clearly when a file is missing (ENOENT) on --dry-run', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    statMock.mockRejectedValueOnce(Object.assign(new Error('nope'), { code: 'ENOENT' }));
+    await expect(
+      runAttach({ issueKey: 'PROJ-1', files: ['./missing.png'], dryRun: true })
+    ).rejects.toThrow(/File not found: \.\/missing\.png/);
+    expect(uploadAttachmentMock).not.toHaveBeenCalled();
   });
 
   it('prints per-attachment summary on TTY', async () => {
@@ -82,22 +117,133 @@ describe('runAttach', () => {
 });
 
 describe('runAttachRemove', () => {
-  it('calls deleteAttachment with the id', async () => {
+  it('deletes by numeric attachment id when -o is given', async () => {
     Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
-    await runAttachRemove({ attachmentId: 'att-9', org: 'acme' });
-    expect(deleteAttachmentMock).toHaveBeenCalledWith('att-9');
+    await runAttachRemove({ target: '99021', org: 'acme' });
+    expect(deleteAttachmentMock).toHaveBeenCalledWith('99021');
   });
 
-  it('does NOT call deleteAttachment on --dry-run', async () => {
+  it('errors about the org when a bare numeric id is given without -o (no API calls)', async () => {
     Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
-    await runAttachRemove({ attachmentId: 'att-9', org: 'acme', dryRun: true, json: true });
+    await expect(
+      runAttachRemove({ target: '99021', dryRun: true, json: true })
+    ).rejects.toThrow(/Cannot infer org from attachment id 99021.*-o/s);
     expect(deleteAttachmentMock).not.toHaveBeenCalled();
-    expect(JSON.parse(writes.join(''))).toEqual({ dryRun: true, attachmentId: 'att-9' });
+    expect(getAttachmentMetaMock).not.toHaveBeenCalled();
+  });
+
+  it('infers the org from an org/id prefix on a numeric target', async () => {
+    getAttachmentMetaMock.mockResolvedValueOnce({
+      id: '99021',
+      filename: 'shot.png',
+      size: 42,
+      author: 'Jane',
+    });
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runAttachRemove({ target: 'acme/99021', dryRun: true, json: true });
+    expect(getAttachmentMetaMock).toHaveBeenCalledWith('99021');
+    expect(JSON.parse(writes.join(''))).toEqual({
+      dryRun: true,
+      attachment: { id: '99021', filename: 'shot.png', size: 42, author: 'Jane' },
+    });
+  });
+
+  it('previews attachment meta on by-id --dry-run when an org is given', async () => {
+    getAttachmentMetaMock.mockResolvedValueOnce({
+      id: '99021',
+      filename: 'shot.png',
+      size: 42,
+      author: 'Jane',
+    });
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runAttachRemove({ target: '99021', org: 'acme', dryRun: true, json: true });
+    expect(deleteAttachmentMock).not.toHaveBeenCalled();
+    expect(getAttachmentMetaMock).toHaveBeenCalledWith('99021');
+    expect(JSON.parse(writes.join(''))).toEqual({
+      dryRun: true,
+      attachment: { id: '99021', filename: 'shot.png', size: 42, author: 'Jane' },
+    });
   });
 
   it('emits {attachmentId, removed:true} when --json after success', async () => {
     Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
-    await runAttachRemove({ attachmentId: 'att-9', org: 'acme', json: true });
-    expect(JSON.parse(writes.join(''))).toEqual({ attachmentId: 'att-9', removed: true });
+    await runAttachRemove({ target: '99021', org: 'acme', json: true });
+    expect(JSON.parse(writes.join(''))).toEqual({ attachmentId: '99021', removed: true });
+  });
+
+  it('removes by issue-key + filename, resolving the id via fetchIssueDetails', async () => {
+    fetchIssueDetailsMock.mockResolvedValueOnce({
+      attachments: [
+        { id: '100', filename: 'a.png', url: 'u', size: 1 },
+        { id: '200', filename: 'report.pdf', url: 'u', size: 2 },
+      ],
+    });
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runAttachRemove({ target: 'PROJ-1', filename: 'report.pdf', json: true });
+    expect(fetchIssueDetailsMock).toHaveBeenCalledWith('PROJ-1', expect.objectContaining({
+      includeComments: false,
+      includeChangelog: false,
+    }));
+    expect(deleteAttachmentMock).toHaveBeenCalledWith('200');
+    expect(JSON.parse(writes.join(''))).toEqual({ attachmentId: '200', removed: true });
+  });
+
+  it('errors clearly, listing available filenames, for an issue-key target without a filename', async () => {
+    fetchIssueDetailsMock.mockResolvedValueOnce({
+      attachments: [
+        { id: '100', filename: 'a.png', url: 'u', size: 1 },
+        { id: '200', filename: 'report.pdf', url: 'u', size: 2 },
+      ],
+    });
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await expect(
+      runAttachRemove({ target: 'PROJ-1' })
+    ).rejects.toThrow(/A filename is required to remove an attachment from PROJ-1.*a\.png.*report\.pdf/s);
+    expect(deleteAttachmentMock).not.toHaveBeenCalled();
+  });
+
+  it('throws with the available filenames when the named attachment is absent', async () => {
+    fetchIssueDetailsMock.mockResolvedValueOnce({
+      attachments: [{ id: '100', filename: 'a.png', url: 'u', size: 1 }],
+    });
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await expect(
+      runAttachRemove({ target: 'PROJ-1', filename: 'missing.pdf' })
+    ).rejects.toThrow(/No attachment named "missing.pdf".*a\.png/s);
+    expect(deleteAttachmentMock).not.toHaveBeenCalled();
+  });
+
+  it('throws listing the matching ids when the filename is ambiguous', async () => {
+    fetchIssueDetailsMock.mockResolvedValueOnce({
+      attachments: [
+        { id: '100', filename: 'report.pdf', url: 'u', size: 1 },
+        { id: '200', filename: 'report.pdf', url: 'u', size: 2 },
+      ],
+    });
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await expect(
+      runAttachRemove({ target: 'PROJ-1', filename: 'report.pdf' })
+    ).rejects.toThrow(/Multiple attachments named "report.pdf".*100.*200/s);
+    expect(deleteAttachmentMock).not.toHaveBeenCalled();
+  });
+
+  it('previews meta on issue-key + filename --dry-run without deleting', async () => {
+    fetchIssueDetailsMock.mockResolvedValueOnce({
+      attachments: [{ id: '200', filename: 'report.pdf', url: 'u', size: 2 }],
+    });
+    getAttachmentMetaMock.mockResolvedValueOnce({
+      id: '200',
+      filename: 'report.pdf',
+      size: 2048,
+      mimeType: 'application/pdf',
+    });
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runAttachRemove({ target: 'PROJ-1', filename: 'report.pdf', dryRun: true, json: true });
+    expect(deleteAttachmentMock).not.toHaveBeenCalled();
+    expect(getAttachmentMetaMock).toHaveBeenCalledWith('200');
+    expect(JSON.parse(writes.join(''))).toEqual({
+      dryRun: true,
+      attachment: { id: '200', filename: 'report.pdf', size: 2048, mimeType: 'application/pdf' },
+    });
   });
 });

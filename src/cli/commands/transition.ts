@@ -1,5 +1,6 @@
-import { loadProfile, findOrgsByProjectKey } from '../../lib/config.js';
+import { loadProfile } from '../../lib/config.js';
 import { JiraClient } from '../../lib/jiraClient.js';
+import { resolveOrg } from '../resolveOrg.js';
 import { parseIssueKey } from '../issueKey.js';
 import { printJson, shouldOutputJson } from '../jsonOutput.js';
 
@@ -7,21 +8,9 @@ export type TransitionOptions = {
   to: string;
   org?: string;
   list?: boolean;
+  dryRun?: boolean;
   json?: boolean;
 };
-
-function resolveOrg(parsedOrg: string | undefined, flagOrg: string | undefined, projectKey: string): string {
-  if (flagOrg) return flagOrg;
-  if (parsedOrg) return parsedOrg;
-  const matches = findOrgsByProjectKey(projectKey);
-  if (matches.length === 1) return matches[0];
-  if (matches.length === 0) {
-    throw new Error(`Project "${projectKey}" not found in any configured org. Pass --org.`);
-  }
-  throw new Error(
-    `Project "${projectKey}" exists in multiple orgs (${matches.join(', ')}). Pass --org.`
-  );
-}
 
 export async function runTransition(issueKeyArg: string, opts: TransitionOptions): Promise<void> {
   const parsed = parseIssueKey(issueKeyArg);
@@ -46,9 +35,18 @@ export async function runTransition(issueKeyArg: string, opts: TransitionOptions
     return;
   }
 
-  const result = await client.transitionIssue(parsed.key, opts.to);
+  const result = await client.transitionIssue(parsed.key, opts.to, { dryRun: opts.dryRun });
   if (shouldOutputJson(opts)) {
-    printJson({ issueKey: parsed.key, transition: result, to: opts.to });
+    printJson({
+      issueKey: parsed.key,
+      transition: result,
+      to: opts.to,
+      ...(opts.dryRun ? { dryRun: true } : {}),
+    });
+    return;
+  }
+  if (opts.dryRun) {
+    console.log(`[dry-run] ${parsed.key} would transition via "${result.name}" → "${opts.to}"`);
     return;
   }
   console.log(`✓ ${parsed.key} transitioned via "${result.name}" → "${opts.to}"`);

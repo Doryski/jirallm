@@ -1,21 +1,30 @@
-import { loadProfile } from '../../lib/config.js';
+import { loadOrgProfile, resolveOptionalProjectKey } from '../../lib/config.js';
 import { JiraClient } from '../../lib/jiraClient.js';
+import { resolveOrg } from '../resolveOrg.js';
 import { printJson, shouldOutputJson } from '../jsonOutput.js';
 
 export type FieldsOptions = {
-  org: string;
+  org?: string;
   project?: string;
   type?: string;
   json?: boolean;
 };
 
 export async function runFields(opts: FieldsOptions): Promise<void> {
-  const profile = await loadProfile({ org: opts.org, project: opts.project });
+  const org =
+    opts.org || opts.project ? resolveOrg(undefined, opts.org, opts.project ?? '') : undefined;
+  const profile = await loadOrgProfile({ org });
   const client = new JiraClient(profile.config, profile.apiToken);
-  const projectKey = opts.project ?? profile.project.key;
+  const projectKey = resolveOptionalProjectKey(profile.org, opts.project);
 
   // With --type: show create-screen fields (incl. allowed select values) for that issue type.
   if (opts.type) {
+    if (!projectKey) {
+      throw new Error(
+        `Cannot resolve a project for --type on org "${profile.org.name}". ` +
+          'Pass --project (-P) to select one.'
+      );
+    }
     const fields = await client.getCreateFields(projectKey, opts.type);
     const custom = fields.filter((f) => f.fieldId.startsWith('customfield_'));
 

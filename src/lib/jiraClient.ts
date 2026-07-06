@@ -7,8 +7,14 @@ import { markdownToWiki } from './markdownToWiki.js';
 
 export type JiraConfig = {
   baseUrl: string;
-  projectKey: string;
+  projectKey?: string;
   userEmail: string;
+};
+
+export type JiraUser = {
+  accountId: string;
+  displayName: string;
+  emailAddress?: string;
 };
 
 type JiraADFContent = {
@@ -53,9 +59,9 @@ type JiraIssue = {
   };
 };
 
-type JiraComment = {
+export type JiraComment = {
   id: string;
-  author: { displayName: string };
+  author: { displayName: string; accountId?: string };
   created: string;
   body: string | JiraADFDocument;
 };
@@ -86,6 +92,8 @@ type HistoryEntry = {
   date: string;
   content: string;
   field?: string;
+  id?: string;
+  authorAccountId?: string;
 };
 
 export type WorklogSummary = {
@@ -212,6 +220,7 @@ type SubtaskSummary = {
 };
 
 export type IssueLinkSummary = {
+  id: string;
   type: string;
   key: string;
   title: string;
@@ -597,6 +606,8 @@ export class JiraClient {
         author: comment.author.displayName,
         date: comment.created,
         content: this.convertADFToMarkdown(comment.body, attachmentMetadata),
+        id: comment.id,
+        authorAccountId: comment.author.accountId,
       });
     }
 
@@ -656,6 +667,27 @@ export class JiraClient {
     return this.makeRequest<{ accountId: string; emailAddress?: string; displayName: string }>(
       '/myself'
     );
+  }
+
+  async searchAssignableUsers(opts: {
+    query: string;
+    issueKey?: string;
+    project?: string;
+    maxResults?: number;
+  }): Promise<JiraUser[]> {
+    const params = new URLSearchParams();
+    params.set('query', opts.query);
+    if (opts.issueKey) params.set('issueKey', opts.issueKey);
+    if (opts.project) params.set('project', opts.project);
+    params.set('maxResults', String(opts.maxResults ?? 50));
+    return this.makeRequest<JiraUser[]>(`/user/assignable/search?${params.toString()}`);
+  }
+
+  async searchUsers(query: string, maxResults = 50): Promise<JiraUser[]> {
+    const params = new URLSearchParams();
+    params.set('query', query);
+    params.set('maxResults', String(maxResults));
+    return this.makeRequest<JiraUser[]>(`/user/search?${params.toString()}`);
   }
 
   async fetchIssueDetails(
@@ -807,6 +839,7 @@ export class JiraClient {
 
     const issueLinks = f.issuelinks as
       | Array<{
+          id: string;
           type: { inward?: string; outward?: string; name?: string };
           inwardIssue?: { key: string; fields: { summary: string; status?: { name: string } } };
           outwardIssue?: { key: string; fields: { summary: string; status?: { name: string } } };
@@ -817,6 +850,7 @@ export class JiraClient {
       for (const link of issueLinks) {
         if (link.inwardIssue) {
           mapped.push({
+            id: link.id,
             type: link.type.inward ?? link.type.name ?? 'relates to',
             key: link.inwardIssue.key,
             title: link.inwardIssue.fields.summary,
@@ -824,6 +858,7 @@ export class JiraClient {
           });
         } else if (link.outwardIssue) {
           mapped.push({
+            id: link.id,
             type: link.type.outward ?? link.type.name ?? 'relates to',
             key: link.outwardIssue.key,
             title: link.outwardIssue.fields.summary,
@@ -865,6 +900,10 @@ export class JiraClient {
     } while (startAt < total);
 
     return allComments;
+  }
+
+  async getComment(issueKey: string, commentId: string): Promise<JiraComment> {
+    return this.makeRequest<JiraComment>(`/issue/${issueKey}/comment/${commentId}`);
   }
 
   async fetchIssueWorklogs(issueKey: string): Promise<WorklogSummary[]> {
@@ -1023,7 +1062,7 @@ export class JiraClient {
     const response = await this.makeAgileRequest<{ values: JiraBoard[] }>(
       `/board?name=${encodeURIComponent(name)}`
     );
-    const exact = response.values.find((b) => b.name === name);
+    const exact = response.values.find((b) => b.name.toLowerCase() === name.toLowerCase());
     if (exact) return exact;
     if (response.values.length === 1) return response.values[0];
     if (response.values.length === 0) {
@@ -1041,12 +1080,20 @@ export class JiraClient {
   async getBoardColumnStatusIds(boardName: string, columnName: string): Promise<string[]> {
     const board = await this.findBoardByName(boardName);
     const config = await this.getBoardConfiguration(board.id);
-    const column = config.columnConfig.columns.find((c) => c.name === columnName);
+    const column = config.columnConfig.columns.find(
+      (c) => c.name.toLowerCase() === columnName.toLowerCase()
+    );
     if (!column) {
       const available = config.columnConfig.columns.map((c) => c.name).join(', ');
       throw new Error(`Column "${columnName}" not found on board "${boardName}". Available: ${available}`);
     }
     return column.statuses.map((s) => s.id);
+  }
+
+  async getBoardColumnNames(boardName: string): Promise<string[]> {
+    const board = await this.findBoardByName(boardName);
+    const config = await this.getBoardConfiguration(board.id);
+    return config.columnConfig.columns.map((c) => c.name);
   }
 
   async searchByJql(
@@ -1214,20 +1261,31 @@ export class JiraClient {
     return response.transitions;
   }
 
-  async transitionIssue(
+  async resolveTransition(
     issueKey: string,
     targetStatus: string
-  ): Promise<Pick<JiraTransition, 'id' | 'name'>> {
+  ): Promise<{ id: string; name: string; toName: string }> {
     const transitions = await this.getIssueTransitions(issueKey);
+    const target = targetStatus.toLowerCase();
     const match =
-      transitions.find((t) => t.to.name === targetStatus) ??
-      transitions.find((t) => t.name === targetStatus);
+      transitions.find((t) => t.to.name.toLowerCase() === target) ??
+      transitions.find((t) => t.name.toLowerCase() === target);
     if (!match) {
       const available = transitions.map((t) => `"${t.name}" → "${t.to.name}"`).join(', ');
       throw new Error(
         `No transition to "${targetStatus}" available on ${issueKey}. Available: ${available}`
       );
     }
+    return { id: match.id, name: match.name, toName: match.to.name };
+  }
+
+  async transitionIssue(
+    issueKey: string,
+    targetStatus: string,
+    opts: { dryRun?: boolean } = {}
+  ): Promise<Pick<JiraTransition, 'id' | 'name'>> {
+    const match = await this.resolveTransition(issueKey, targetStatus);
+    if (opts.dryRun) return { id: match.id, name: match.name };
     const url = `${this.config.baseUrl}/rest/api/3/issue/${issueKey}/transitions`;
     const response = await fetch(url, {
       method: 'POST',
@@ -1475,6 +1533,29 @@ export class JiraClient {
     return response.json() as Promise<
       Array<{ id: string; filename: string; size: number; mimeType?: string }>
     >;
+  }
+
+  async getAttachmentMeta(attachmentId: string): Promise<{
+    id: string;
+    filename: string;
+    size: number;
+    mimeType?: string;
+    author?: string;
+  }> {
+    const meta = await this.makeRequest<{
+      id: string;
+      filename: string;
+      size: number;
+      mimeType?: string;
+      author?: { displayName?: string };
+    }>(`/attachment/${attachmentId}`);
+    return {
+      id: meta.id,
+      filename: meta.filename,
+      size: meta.size,
+      mimeType: meta.mimeType,
+      author: meta.author?.displayName,
+    };
   }
 
   async deleteAttachment(attachmentId: string): Promise<void> {

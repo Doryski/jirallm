@@ -219,6 +219,202 @@ describe('JiraClient.listPriorities', () => {
   });
 });
 
+describe('JiraClient.searchAssignableUsers', () => {
+  it('GETs /user/assignable/search with query, issueKey and maxResults', async () => {
+    const { client, calls } = captureFetch(() => [
+      { accountId: 'a1', displayName: 'Alice', emailAddress: 'alice@x.com' },
+    ]);
+    const users = await client.searchAssignableUsers({
+      query: 'ali',
+      issueKey: 'PROJ-1',
+      maxResults: 10,
+    });
+    expect(calls[0].method).toBe('GET');
+    expect(calls[0].url).toContain('/rest/api/3/user/assignable/search?');
+    expect(calls[0].url).toContain('query=ali');
+    expect(calls[0].url).toContain('issueKey=PROJ-1');
+    expect(calls[0].url).toContain('maxResults=10');
+    expect(users[0].accountId).toBe('a1');
+  });
+
+  it('passes project instead of issueKey and defaults maxResults', async () => {
+    const { client, calls } = captureFetch(() => []);
+    await client.searchAssignableUsers({ query: 'bob', project: 'PROJ' });
+    expect(calls[0].url).toContain('project=PROJ');
+    expect(calls[0].url).toContain('maxResults=50');
+    expect(calls[0].url).not.toContain('issueKey');
+  });
+});
+
+describe('JiraClient.searchUsers', () => {
+  it('GETs /user/search with query and maxResults', async () => {
+    const { client, calls } = captureFetch(() => [
+      { accountId: 'a2', displayName: 'Bob' },
+    ]);
+    const users = await client.searchUsers('bob', 5);
+    expect(calls[0].url).toContain('/rest/api/3/user/search?');
+    expect(calls[0].url).toContain('query=bob');
+    expect(calls[0].url).toContain('maxResults=5');
+    expect(users[0].displayName).toBe('Bob');
+  });
+});
+
+describe('JiraClient.findBoardByName', () => {
+  it('matches board name case-insensitively', async () => {
+    const { client } = captureFetch(() => ({
+      values: [
+        { id: 1, name: 'Alpha Board', type: 'scrum' },
+        { id: 2, name: 'Beta Board', type: 'kanban' },
+      ],
+    }));
+    const board = await client.findBoardByName('beta board');
+    expect(board.id).toBe(2);
+  });
+});
+
+describe('JiraClient.getBoardColumnStatusIds', () => {
+  it('matches column name case-insensitively', async () => {
+    const { client } = captureFetch((url) => {
+      if (url.includes('/board/1/configuration')) {
+        return {
+          columnConfig: {
+            columns: [
+              { name: 'To Do', statuses: [{ id: '10', self: 'x' }] },
+              { name: 'In Progress', statuses: [{ id: '20', self: 'x' }] },
+            ],
+          },
+        };
+      }
+      return { values: [{ id: 1, name: 'Board', type: 'scrum' }] };
+    });
+    const ids = await client.getBoardColumnStatusIds('Board', 'in progress');
+    expect(ids).toEqual(['20']);
+  });
+});
+
+describe('JiraClient.getBoardColumnNames', () => {
+  it('returns the ordered list of column names', async () => {
+    const { client } = captureFetch((url) => {
+      if (url.includes('/board/1/configuration')) {
+        return {
+          columnConfig: {
+            columns: [
+              { name: 'To Do', statuses: [] },
+              { name: 'In Progress', statuses: [] },
+              { name: 'Done', statuses: [] },
+            ],
+          },
+        };
+      }
+      return { values: [{ id: 1, name: 'Board', type: 'scrum' }] };
+    });
+    const names = await client.getBoardColumnNames('Board');
+    expect(names).toEqual(['To Do', 'In Progress', 'Done']);
+  });
+});
+
+function installError(status: number, statusText: string, text: string): void {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => {
+      return { ok: false, status, statusText, text: async () => text } as unknown as Response;
+    })
+  );
+}
+
+describe('JiraClient.findBoardByName — resolution branches', () => {
+  it('returns the sole result when there is exactly one non-exact match', async () => {
+    const { client } = captureFetch(() => ({
+      values: [{ id: 5, name: 'The Only Board', type: 'scrum' }],
+    }));
+    const board = await client.findBoardByName('only');
+    expect(board.id).toBe(5);
+  });
+
+  it('throws when no board matches', async () => {
+    const { client } = captureFetch(() => ({ values: [] }));
+    await expect(client.findBoardByName('nope')).rejects.toThrow(/No board found matching "nope"/);
+  });
+
+  it('throws listing candidates when multiple boards match without an exact name', async () => {
+    const { client } = captureFetch(() => ({
+      values: [
+        { id: 1, name: 'Team Alpha', type: 'scrum' },
+        { id: 2, name: 'Team Beta', type: 'kanban' },
+      ],
+    }));
+    await expect(client.findBoardByName('team')).rejects.toThrow(
+      /Multiple boards matched "team": Team Alpha, Team Beta/
+    );
+  });
+});
+
+describe('JiraClient.getBoardColumnStatusIds — missing column', () => {
+  it('throws with the available column names when the column is absent', async () => {
+    const { client } = captureFetch((url) => {
+      if (url.includes('/board/1/configuration')) {
+        return {
+          columnConfig: {
+            columns: [
+              { name: 'To Do', statuses: [{ id: '10', self: 'x' }] },
+              { name: 'Done', statuses: [{ id: '30', self: 'x' }] },
+            ],
+          },
+        };
+      }
+      return { values: [{ id: 1, name: 'Board', type: 'scrum' }] };
+    });
+    await expect(client.getBoardColumnStatusIds('Board', 'Review')).rejects.toThrow(
+      /Column "Review" not found on board "Board"\. Available: To Do, Done/
+    );
+  });
+});
+
+describe('JiraClient.searchByJql', () => {
+  it('sends default fields and accumulates a single page', async () => {
+    const bodies: unknown[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        if (typeof init?.body === 'string') bodies.push(JSON.parse(init.body));
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => ({ issues: [{ key: 'PROJ-1', fields: {} }], isLast: true }),
+        } as unknown as Response;
+      })
+    );
+    const client = new JiraClient(FAKE_CONFIG, 'token');
+    const issues = await client.searchByJql('project = PROJ');
+    expect(issues).toHaveLength(1);
+    expect((bodies[0] as { fields: string[] }).fields).toEqual([
+      'summary',
+      'status',
+      'assignee',
+      'issuetype',
+    ]);
+  });
+});
+
+describe('JiraClient — request error propagation', () => {
+  it('makeRequest surfaces status, statusText and body on non-2xx (listProjects)', async () => {
+    installError(500, 'Internal Server Error', 'kaboom');
+    const client = new JiraClient(FAKE_CONFIG, 'token');
+    await expect(client.listProjects()).rejects.toThrow(
+      /Jira API request failed: 500 Internal Server Error\nkaboom/
+    );
+  });
+
+  it('makeAgileRequest surfaces the agile error prefix on non-2xx (listBoards)', async () => {
+    installError(403, 'Forbidden', 'no agile access');
+    const client = new JiraClient(FAKE_CONFIG, 'token');
+    await expect(client.listBoards()).rejects.toThrow(
+      /Jira Agile API request failed: 403 Forbidden\nno agile access/
+    );
+  });
+});
+
 describe('JiraClient.listStatuses', () => {
   it('GETs /status when no project provided', async () => {
     const { client, calls } = captureFetch(() => [{ id: '1', name: 'Open' }]);

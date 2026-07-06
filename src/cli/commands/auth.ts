@@ -1,5 +1,5 @@
 import { intro, outro, password, confirm, isCancel, cancel } from '@clack/prompts';
-import { setToken, removeToken, hasStoredToken } from '../../lib/credentials.js';
+import { setToken, removeToken, hasStoredToken, getTokenSource } from '../../lib/credentials.js';
 import { listOrgs, readConfig } from '../../lib/config.js';
 
 function ensureOrg(name: string): void {
@@ -72,11 +72,13 @@ export async function runAuthList(): Promise<void> {
 
 export async function runAuthStatus(orgName: string): Promise<void> {
   ensureOrg(orgName);
-  if (!(await hasStoredToken(orgName))) {
+  const source = await getTokenSource(orgName);
+  if (source === null) {
     console.error(
       `No token stored for "${orgName}". Run \`jirallm auth set --org ${orgName}\`.`
     );
     process.exit(1);
   }
-  console.log(`${orgName}: token stored in OS keychain.`);
+  const detail = source === 'keychain' ? 'stored in OS keychain' : 'resolved from environment variable';
+  console.log(`${orgName}: token ${detail}.`);
 }

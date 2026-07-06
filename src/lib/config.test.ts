@@ -9,8 +9,13 @@ vi.mock('./credentials.js', () => ({
 
 import {
   findOrgsByProjectKey,
+  listOrgs,
+  loadOrgProfile,
   loadProfile,
   readConfig,
+  removeOrg,
+  removeProject,
+  resolveOptionalProjectKey,
   upsertOrg,
   upsertProject,
 } from './config.js';
@@ -65,10 +70,24 @@ describe('loadProfile', () => {
     expect(r.project.outputDir?.startsWith('~')).toBe(false);
   });
 
-  it('errors when no project is provided', async () => {
+  it('auto-selects the sole project when none is provided', async () => {
     writeFileSync(configPath, SAMPLE_CONFIG);
-    await expect(loadProfile({ org: 'widgets', configPath })).rejects.toThrow(
+    const r = await loadProfile({ org: 'widgets', configPath });
+    expect(r.project.key).toBe('WID');
+    expect(r.config.projectKey).toBe('WID');
+  });
+
+  it('errors when no project is provided for a multi-project org', async () => {
+    writeFileSync(configPath, SAMPLE_CONFIG);
+    await expect(loadProfile({ org: 'acme', configPath })).rejects.toThrow(
       /No project specified/
+    );
+  });
+
+  it('includes an actionable hint and available projects when no project is provided', async () => {
+    writeFileSync(configPath, SAMPLE_CONFIG);
+    await expect(loadProfile({ org: 'acme', configPath })).rejects.toThrow(
+      /No project specified for org "acme"\. Pass --project\. Available projects: PROJ, DOCS, LIB/
     );
   });
 
@@ -100,6 +119,33 @@ describe('loadProfile', () => {
   });
 });
 
+describe('loadOrgProfile', () => {
+  it('resolves org and token for a multi-project org without a project', async () => {
+    writeFileSync(configPath, SAMPLE_CONFIG);
+    const r = await loadOrgProfile({ org: 'acme', configPath });
+    expect(r.org.name).toBe('acme');
+    expect(r.apiToken).toBe('fake-token');
+    expect(r.config.baseUrl).toBe('https://acme.atlassian.net');
+    expect(r.config.projectKey).toBeUndefined();
+  });
+
+  it('errors when no org is provided', async () => {
+    writeFileSync(configPath, SAMPLE_CONFIG);
+    await expect(loadOrgProfile({ configPath })).rejects.toThrow(/--org/);
+  });
+
+  it('errors on missing org', async () => {
+    writeFileSync(configPath, SAMPLE_CONFIG);
+    await expect(loadOrgProfile({ org: 'nope', configPath })).rejects.toThrow(/not found/);
+  });
+
+  it('errors when org has no token', async () => {
+    writeFileSync(configPath, SAMPLE_CONFIG);
+    mockedGetToken.mockResolvedValueOnce(undefined);
+    await expect(loadOrgProfile({ org: 'acme', configPath })).rejects.toThrow(/No API token/);
+  });
+});
+
 describe('upsertOrg + upsertProject', () => {
   it('writes and round-trips an org with projects', () => {
     upsertOrg(
@@ -124,6 +170,101 @@ describe('upsertOrg + upsertProject', () => {
 
   it('upsertProject errors if org missing', () => {
     expect(() => upsertProject('nope', { key: 'X' }, configPath)).toThrow(/not found/);
+  });
+
+  it('round-trips org projects both with and without outputDir', () => {
+    upsertOrg(
+      {
+        name: 'multi',
+        baseUrl: 'https://multi.example',
+        userEmail: 'm@x.example',
+        projects: {
+          WITH: { key: 'WITH', outputDir: '/tmp/with' },
+          WITHOUT: { key: 'WITHOUT' },
+        },
+      },
+      configPath
+    );
+
+    const raw = readConfig(configPath);
+    expect(raw.orgs?.multi.projects?.WITH.output_dir).toBe('/tmp/with');
+    expect(raw.orgs?.multi.projects?.WITHOUT.output_dir).toBeUndefined();
+    expect(raw.orgs?.multi.projects?.WITHOUT).toEqual({});
+  });
+});
+
+describe('removeOrg', () => {
+  it('removes an existing org and reports removed', () => {
+    writeFileSync(configPath, SAMPLE_CONFIG);
+    expect(removeOrg('acme', configPath)).toEqual({ removed: true });
+    expect(readConfig(configPath).orgs?.acme).toBeUndefined();
+    expect(readConfig(configPath).orgs?.widgets).toBeDefined();
+  });
+
+  it('reports not removed when the org does not exist', () => {
+    writeFileSync(configPath, SAMPLE_CONFIG);
+    expect(removeOrg('nope', configPath)).toEqual({ removed: false });
+    expect(readConfig(configPath).orgs?.acme).toBeDefined();
+  });
+
+  it('reports not removed against an empty config', () => {
+    expect(removeOrg('anything', configPath)).toEqual({ removed: false });
+  });
+});
+
+describe('removeProject', () => {
+  it('removes an existing project and reports removed', () => {
+    writeFileSync(configPath, SAMPLE_CONFIG);
+    expect(removeProject('acme', 'DOCS', configPath)).toEqual({ removed: true });
+    const raw = readConfig(configPath);
+    expect(raw.orgs?.acme.projects?.DOCS).toBeUndefined();
+    expect(raw.orgs?.acme.projects?.PROJ).toBeDefined();
+  });
+
+  it('reports not removed when the org does not exist', () => {
+    writeFileSync(configPath, SAMPLE_CONFIG);
+    expect(removeProject('nope', 'DOCS', configPath)).toEqual({ removed: false });
+  });
+
+  it('reports not removed when the project does not exist under a known org', () => {
+    writeFileSync(configPath, SAMPLE_CONFIG);
+    expect(removeProject('acme', 'MISSING', configPath)).toEqual({ removed: false });
+    expect(readConfig(configPath).orgs?.acme.projects?.PROJ).toBeDefined();
+  });
+});
+
+describe('listOrgs + resolveOptionalProjectKey', () => {
+  it('lists configured org names', () => {
+    writeFileSync(configPath, SAMPLE_CONFIG);
+    expect(listOrgs(readConfig(configPath)).sort()).toEqual(['acme', 'widgets']);
+  });
+
+  it('returns empty list for an empty config', () => {
+    expect(listOrgs(readConfig(configPath))).toEqual([]);
+  });
+
+  it('resolves the explicit project key when provided', async () => {
+    writeFileSync(configPath, SAMPLE_CONFIG);
+    const { org } = await loadOrgProfile({ org: 'acme', configPath });
+    expect(resolveOptionalProjectKey(org, 'DOCS')).toBe('DOCS');
+  });
+
+  it('auto-resolves the sole project when none is provided', async () => {
+    writeFileSync(configPath, SAMPLE_CONFIG);
+    const { org } = await loadOrgProfile({ org: 'widgets', configPath });
+    expect(resolveOptionalProjectKey(org)).toBe('WID');
+  });
+
+  it('returns undefined for a multi-project org when none is provided', async () => {
+    writeFileSync(configPath, SAMPLE_CONFIG);
+    const { org } = await loadOrgProfile({ org: 'acme', configPath });
+    expect(resolveOptionalProjectKey(org)).toBeUndefined();
+  });
+
+  it('throws for an unknown explicit project key', async () => {
+    writeFileSync(configPath, SAMPLE_CONFIG);
+    const { org } = await loadOrgProfile({ org: 'acme', configPath });
+    expect(() => resolveOptionalProjectKey(org, 'NOPE')).toThrow(/not found in org/);
   });
 });
 

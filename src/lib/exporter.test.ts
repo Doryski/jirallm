@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -44,7 +44,7 @@ const FULL_TASK: JiraTaskData = {
   epic: { key: 'PROJ-50', title: 'Epic' },
   subtasks: [{ key: 'PROJ-2', title: 'Sub', status: 'Done' }],
   issueLinks: [
-    { type: 'blocks', key: 'PROJ-200', title: 'Blocked one', status: 'To Do' },
+    { id: '10501', type: 'blocks', key: 'PROJ-200', title: 'Blocked one', status: 'To Do' },
   ],
   customFields: { severity: 'S2' },
   attachments: [],
@@ -143,7 +143,7 @@ describe('JiraExporter.exportIssue frontmatter', () => {
     });
     const content = readFileSync(join(tmpDir, 'proj-1', 'task.md'), 'utf-8');
     expect(content).toMatch(/subtasks:\n\s+- key: "PROJ-2"/);
-    expect(content).toMatch(/issueLinks:\n\s+- type: "blocks"/);
+    expect(content).toMatch(/issueLinks:\n\s+- id: "10501"\n\s+type: "blocks"/);
   });
 
   it('serializes timetracking as a nested mapping', async () => {
@@ -428,5 +428,73 @@ describe('JiraExporter video frame extraction', () => {
 
     expect(vi.mocked(extractFrames)).not.toHaveBeenCalled();
     expect(outcome.videos).toEqual([]);
+  });
+});
+
+describe('JiraExporter attachment filename deduplication', () => {
+  it('disambiguates duplicate filenames, preserving extension when present', async () => {
+    const task: JiraTaskData = {
+      ...FULL_TASK,
+      attachments: [
+        { id: '1', filename: 'doc.pdf', url: 'https://x.example/1', size: 10 },
+        { id: '2', filename: 'doc.pdf', url: 'https://x.example/2', size: 20 },
+        { id: '3', filename: 'README', url: 'https://x.example/3', size: 30 },
+        { id: '4', filename: 'README', url: 'https://x.example/4', size: 40 },
+      ],
+    };
+    const downloadAttachment = vi.fn(async (_url: string, attPath: string) => {
+      writeFileSync(attPath, 'x');
+    });
+    const exporter = makeExporter(task, { downloadAttachment });
+
+    const outcome = await exporter.exportIssue('PROJ-1', { outputDir: tmpDir });
+
+    expect(outcome.attachmentCount).toBe(4);
+    const savedNames = downloadAttachment.mock.calls.map(([, attPath]) =>
+      (attPath as string).split('/').pop()
+    );
+    expect(savedNames).toEqual(['doc.pdf', 'doc-1.pdf', 'README', 'README-1']);
+  });
+});
+
+describe('JiraExporter.exportIssues', () => {
+  it('creates the output directory when it does not exist', async () => {
+    const nested = join(tmpDir, 'deep', 'nested', 'out');
+    const exporter = makeExporter(FULL_TASK);
+
+    const result = await exporter.exportIssues(['PROJ-1'], { outputDir: nested });
+
+    expect(existsSync(nested)).toBe(true);
+    expect(existsSync(join(nested, '.gitignore'))).toBe(true);
+    expect(result.imported).toHaveLength(1);
+  });
+
+  it('captures per-issue failures without aborting the batch', async () => {
+    const exporter = makeExporter(FULL_TASK, {
+      fetchIssueDetails: vi.fn(async (key: string) => {
+        if (key === 'PROJ-BAD') throw new Error('boom');
+        return FULL_TASK;
+      }),
+    });
+
+    const result = await exporter.exportIssues(['PROJ-1', 'PROJ-BAD'], {
+      outputDir: tmpDir,
+    });
+
+    expect(result.imported.map((i) => i.key)).toEqual(['PROJ-1']);
+    expect(result.failed).toEqual([{ key: 'PROJ-BAD', error: 'boom' }]);
+  });
+
+  it('reports a non-Error rejection as a stringified error', async () => {
+    const exporter = makeExporter(FULL_TASK, {
+      fetchIssueDetails: vi.fn(async () => {
+        throw 'plain string failure';
+      }),
+    });
+
+    const result = await exporter.exportIssues(['PROJ-1'], { outputDir: tmpDir });
+
+    expect(result.imported).toHaveLength(0);
+    expect(result.failed).toEqual([{ key: 'PROJ-1', error: 'plain string failure' }]);
   });
 });

@@ -1,19 +1,19 @@
-import { loadProfile } from '../../lib/config.js';
+import { loadOrgProfile } from '../../lib/config.js';
 import { JiraClient } from '../../lib/jiraClient.js';
 import { printJson, shouldOutputJson } from '../jsonOutput.js';
 
 export type SearchOptions = {
   jql: string;
   org?: string;
-  project?: string;
   limit?: string;
   cursor?: string;
+  nextPageToken?: string;
   fields?: string;
   json?: boolean;
 };
 
 export async function runSearch(opts: SearchOptions): Promise<void> {
-  const profile = await loadProfile({ org: opts.org, project: opts.project });
+  const profile = await loadOrgProfile({ org: opts.org });
   const client = new JiraClient(profile.config, profile.apiToken);
 
   const fields = opts.fields?.split(',').map((s) => s.trim()).filter(Boolean);
@@ -22,7 +22,7 @@ export async function runSearch(opts: SearchOptions): Promise<void> {
   const page = await client.searchIssues(opts.jql, {
     fields,
     limit,
-    nextPageToken: opts.cursor,
+    nextPageToken: opts.nextPageToken || opts.cursor,
   });
 
   const rows = page.issues.map((issue) => {
@@ -53,7 +53,7 @@ export async function runSearch(opts: SearchOptions): Promise<void> {
   console.log(`${rows.length} issue(s):`);
   for (const r of rows) {
     const assignee = r.assignee ? ` [${r.assignee}]` : '';
-    console.log(`  ${r.key}  ${r.summary}${assignee}`);
+    console.log(`  ${r.key}  ${r.summary}  (${r.status})${assignee}`);
   }
   if (!page.isLast && page.nextPageToken) {
     console.log(`\nMore results — pass --cursor ${page.nextPageToken}`);

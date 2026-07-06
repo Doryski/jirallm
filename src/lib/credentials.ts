@@ -34,11 +34,34 @@ function entryFor(keyring: KeyringModule, orgName: string): Entry {
   return new keyring.Entry(SERVICE, `${orgName}:api_token`);
 }
 
+function envTokenFor(orgName: string): string | undefined {
+  const orgSpecific = process.env[`JIRALLM_API_TOKEN_${orgName.toUpperCase()}`];
+  if (orgSpecific) return orgSpecific;
+  return process.env.JIRALLM_API_TOKEN || undefined;
+}
+
 export async function getToken(orgName: string): Promise<string | undefined> {
   const keyring = await loadKeyring();
+  const fromKeyring = await readKeyringToken(keyring, orgName);
+  if (fromKeyring !== undefined) return fromKeyring;
+  return envTokenFor(orgName);
+}
+
+export async function getTokenSource(orgName: string): Promise<'keychain' | 'env' | null> {
+  const keyring = await loadKeyring();
+  const fromKeyring = await readKeyringToken(keyring, orgName);
+  if (fromKeyring !== undefined) return 'keychain';
+  if (envTokenFor(orgName) !== undefined) return 'env';
+  return null;
+}
+
+async function readKeyringToken(
+  keyring: KeyringModule | undefined,
+  orgName: string
+): Promise<string | undefined> {
   if (!keyring) return undefined;
   try {
-    return entryFor(keyring, orgName).getPassword() ?? undefined;
+    return entryFor(keyring, orgName).getPassword() || undefined;
   } catch {
     // NoEntry / Ambiguous → treat as missing
     return undefined;

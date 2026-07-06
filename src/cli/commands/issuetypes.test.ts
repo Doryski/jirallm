@@ -1,12 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../../lib/config.js', () => ({
-  loadProfile: vi.fn(async () => ({
-    config: { baseUrl: 'https://x', userEmail: 'u@x', projectKey: 'PROJ' },
-    project: { key: 'PROJ' },
-    apiToken: 'tok',
-  })),
+const { loadOrgProfileMock, findOrgsByProjectKeyMock } = vi.hoisted(() => ({
+  loadOrgProfileMock: vi.fn(),
+  findOrgsByProjectKeyMock: vi.fn(() => ['acme']),
 }));
+
+vi.mock('../../lib/config.js', async () => {
+  const actual = await vi.importActual<typeof import('../../lib/config.js')>('../../lib/config.js');
+  return {
+    ...actual,
+    loadOrgProfile: loadOrgProfileMock,
+    findOrgsByProjectKey: findOrgsByProjectKeyMock,
+  };
+});
 
 const listIssueTypesMock = vi.fn();
 vi.mock('../../lib/jiraClient.js', () => ({
@@ -16,6 +22,12 @@ vi.mock('../../lib/jiraClient.js', () => ({
 }));
 
 import { runIssueTypes } from './issuetypes.js';
+
+const makeProfile = (projects: Record<string, { key: string }>) => ({
+  config: { baseUrl: 'https://x', userEmail: 'u@x' },
+  org: { name: 'acme', baseUrl: 'https://x', userEmail: 'u@x', projects },
+  apiToken: 'tok',
+});
 
 let logs: string[];
 let writes: string[];
@@ -27,6 +39,10 @@ beforeEach(() => {
   vi.spyOn(console, 'log').mockImplementation((...a) => { logs.push(a.map(String).join(' ')); });
   vi.spyOn(process.stdout, 'write').mockImplementation((c) => { writes.push(String(c)); return true; });
   listIssueTypesMock.mockReset();
+  loadOrgProfileMock.mockReset();
+  loadOrgProfileMock.mockResolvedValue(makeProfile({ PROJ: { key: 'PROJ' } }));
+  findOrgsByProjectKeyMock.mockClear();
+  findOrgsByProjectKeyMock.mockReturnValue(['acme']);
 });
 
 afterEach(() => {
@@ -35,14 +51,38 @@ afterEach(() => {
 });
 
 describe('runIssueTypes', () => {
-  it('falls back to profile.project.key when --project not provided', async () => {
+  it('project-scopes to the sole project when --project not provided', async () => {
     listIssueTypesMock.mockResolvedValue([]);
     Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
     await runIssueTypes({ org: 'acme' });
     expect(listIssueTypesMock).toHaveBeenCalledWith('PROJ');
   });
 
+  it('lists org-wide issue types when no project is resolvable', async () => {
+    loadOrgProfileMock.mockResolvedValue(
+      makeProfile({ PROJ: { key: 'PROJ' }, OTHER: { key: 'OTHER' } })
+    );
+    listIssueTypesMock.mockResolvedValue([]);
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runIssueTypes({ org: 'acme' });
+    expect(listIssueTypesMock).toHaveBeenCalledWith(undefined);
+  });
+
+  it('infers org from -P when --org is omitted and project-scopes the listing', async () => {
+    findOrgsByProjectKeyMock.mockReturnValue(['CargoNest']);
+    loadOrgProfileMock.mockResolvedValue(makeProfile({ CN: { key: 'CN' } }));
+    listIssueTypesMock.mockResolvedValue([]);
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runIssueTypes({ project: 'CN' });
+    expect(findOrgsByProjectKeyMock).toHaveBeenCalledWith('CN');
+    expect(loadOrgProfileMock).toHaveBeenCalledWith({ org: 'CargoNest' });
+    expect(listIssueTypesMock).toHaveBeenCalledWith('CN');
+  });
+
   it('uses explicit --project override', async () => {
+    loadOrgProfileMock.mockResolvedValue(
+      makeProfile({ PROJ: { key: 'PROJ' }, OTHER: { key: 'OTHER' } })
+    );
     listIssueTypesMock.mockResolvedValue([]);
     Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
     await runIssueTypes({ org: 'acme', project: 'OTHER' });

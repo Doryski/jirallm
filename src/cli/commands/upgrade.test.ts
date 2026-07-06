@@ -167,6 +167,31 @@ describe('runUpgrade', () => {
     expect(logs.join('\n')).toContain('Update available');
   });
 
+  it('--check --json up-to-date: prints JSON, does not exit', async () => {
+    setEnv('/usr/local/lib/node_modules/jirallm/dist/cli/index.js', 'npm/10');
+    const { version } = (await import('../../../package.json', { with: { type: 'json' } })).default as { version: string };
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ version }), { status: 200 }));
+    await runUpgrade({ check: true, json: true });
+    expect(runInteractiveMock).not.toHaveBeenCalled();
+    expect(JSON.parse(logs.join('\n'))).toEqual({ current: version, latest: version, outdated: false });
+  });
+
+  it('--check --json when outdated: prints JSON and exits non-zero', async () => {
+    setEnv('/usr/local/lib/node_modules/jirallm/dist/cli/index.js', 'npm/10');
+    const { version } = (await import('../../../package.json', { with: { type: 'json' } })).default as { version: string };
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ version: '99.0.0' }), { status: 200 }));
+    await expect(runUpgrade({ check: true, json: true })).rejects.toThrow('exit:1');
+    expect(JSON.parse(logs.join('\n'))).toEqual({ current: version, latest: '99.0.0', outdated: true });
+  });
+
+  it('--check --json emits no human-readable lines', async () => {
+    setEnv('/usr/local/lib/node_modules/jirallm/dist/cli/index.js', 'npm/10');
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ version: '99.0.0' }), { status: 200 }));
+    await expect(runUpgrade({ check: true, json: true })).rejects.toThrow('exit:1');
+    expect(logs.join('\n')).not.toContain('Update available');
+    expect(logs.join('\n')).not.toContain('Current:');
+  });
+
   it('without --yes, confirms via prompt and aborts on no', async () => {
     setEnv('/usr/local/lib/node_modules/jirallm/dist/cli/index.js', 'npm/10');
     confirmMock.mockResolvedValue(false);

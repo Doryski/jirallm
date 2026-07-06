@@ -1,10 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../../lib/config.js', () => ({
-  loadProfile: vi.fn(async () => ({
-    config: { baseUrl: 'https://x.atlassian.net', userEmail: 'u@x', projectKey: 'PROJ' },
+const { loadOrgProfileMock } = vi.hoisted(() => ({
+  loadOrgProfileMock: vi.fn(async () => ({
+    org: {
+      name: 'acme',
+      projects: {
+        alpha: { key: 'ALPHA', boardName: 'Alpha' },
+        beta: { key: 'BETA', boardName: 'Beta' },
+      },
+    },
+    config: { baseUrl: 'https://x.atlassian.net', userEmail: 'u@x' },
     apiToken: 'tok',
   })),
+}));
+
+vi.mock('../../lib/config.js', () => ({
+  loadOrgProfile: loadOrgProfileMock,
 }));
 
 const getCurrentUserMock = vi.fn();
@@ -29,6 +40,7 @@ beforeEach(() => {
   vi.spyOn(process.stdout, 'write').mockImplementation((c) => { writes.push(String(c)); return true; });
   getCurrentUserMock.mockReset();
   getCurrentUserMock.mockResolvedValue(FAKE_USER);
+  loadOrgProfileMock.mockClear();
 });
 
 afterEach(() => {
@@ -57,6 +69,13 @@ describe('runMe', () => {
     expect(logs.join('\n')).toContain('Display name: Jane');
     expect(logs.join('\n')).toContain('Account ID:   acc-1');
     expect(logs.join('\n')).toContain('Email:        jane@x');
+  });
+
+  it('resolves without a project for a multi-project org (loadOrgProfile, no -P)', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runMe({ org: 'acme' });
+    expect(loadOrgProfileMock).toHaveBeenCalledWith({ org: 'acme' });
+    expect(logs.join('\n')).toContain('Account ID:   acc-1');
   });
 
   it('omits email line when missing', async () => {

@@ -15,11 +15,17 @@ export type WorklogOptions = {
   org?: string;
   noWiki?: boolean;
   dryRun?: boolean;
+  json?: boolean;
+  issueKey?: string;
+  duration?: string;
 };
 
 type Resolved = ValidatedWorklog & { resolvedOrg: string };
 
-export async function runWorklog(opts: WorklogOptions): Promise<void> {
+function readEntries(opts: WorklogOptions): unknown[] {
+  if (opts.issueKey && opts.duration) {
+    return [{ issueKey: opts.issueKey, duration: opts.duration }];
+  }
   const raw = opts.file ? readFileSync(opts.file, 'utf-8') : readFileSync(0, 'utf-8');
   if (!raw.trim()) throw new Error('Empty input.');
 
@@ -35,8 +41,16 @@ export async function runWorklog(opts: WorklogOptions): Promise<void> {
   if (parsed.length === 0) {
     throw new Error('No worklog entries provided.');
   }
+  return parsed;
+}
 
-  console.log(`Validating ${parsed.length} worklog entr${parsed.length === 1 ? 'y' : 'ies'}...`);
+export async function runWorklog(opts: WorklogOptions): Promise<void> {
+  const json = opts.json ?? false;
+  const parsed = readEntries(opts);
+
+  if (!json) {
+    console.log(`Validating ${parsed.length} worklog entr${parsed.length === 1 ? 'y' : 'ies'}...`);
+  }
   const { valid, errors } = validateAll(parsed);
 
   const resolved: Resolved[] = [];
@@ -50,16 +64,28 @@ export async function runWorklog(opts: WorklogOptions): Promise<void> {
   }
 
   if (errors.length > 0) {
-    console.error(`Validation failed for ${errors.length} entr${errors.length === 1 ? 'y' : 'ies'}:`);
-    for (const e of errors.sort((a, b) => a.index - b.index)) {
-      console.error(`  [${e.index}] ${e.message}`);
+    if (json) {
+      console.log(
+        JSON.stringify(
+          { ok: false, errors: errors.sort((a, b) => a.index - b.index) },
+          null,
+          2
+        )
+      );
+    } else {
+      console.error(`Validation failed for ${errors.length} entr${errors.length === 1 ? 'y' : 'ies'}:`);
+      for (const e of errors.sort((a, b) => a.index - b.index)) {
+        console.error(`  [${e.index}] ${e.message}`);
+      }
     }
     throw new Error('Aborting — fix validation errors and retry.');
   }
 
-  console.log(`  ✓ ${resolved.length}/${parsed.length} valid`);
-  console.log('');
-  console.log(`Posting ${resolved.length} worklog(s)...`);
+  if (!json) {
+    console.log(`  ✓ ${resolved.length}/${parsed.length} valid`);
+    console.log('');
+    console.log(`Posting ${resolved.length} worklog(s)...`);
+  }
 
   const clientCache = new Map<string, JiraClient>();
   const getClient = async (org: string, projectKey: string): Promise<JiraClient> => {
@@ -71,8 +97,20 @@ export async function runWorklog(opts: WorklogOptions): Promise<void> {
     return client;
   };
 
-  type Result = { entry: Resolved; ok: true; id: string } | { entry: Resolved; ok: false; error: string };
-  const results: Result[] = [];
+  type JsonEntry = {
+    index: number;
+    org: string;
+    issueKey: string;
+    durationSeconds: number;
+    started: string;
+    comment?: string;
+    ok?: boolean;
+    id?: string;
+    error?: string;
+  };
+  const jsonEntries: JsonEntry[] = [];
+  let okCount = 0;
+  let failCount = 0;
 
   for (const entry of resolved.sort((a, b) => a.index - b.index)) {
     const started = formatStartedForJira(entry.started);
@@ -82,12 +120,23 @@ export async function runWorklog(opts: WorklogOptions): Promise<void> {
         : markdownToWiki(entry.description)
       : undefined;
     const human = formatDurationHuman(entry.durationSeconds);
+    const base: JsonEntry = {
+      index: entry.index,
+      org: entry.resolvedOrg,
+      issueKey: entry.issueKey,
+      durationSeconds: entry.durationSeconds,
+      started,
+      comment: commentBody,
+    };
 
     if (opts.dryRun) {
-      console.log(
-        `  • [${entry.index}] ${entry.resolvedOrg}/${entry.issueKey}  ${human}  started=${started}` +
-          (commentBody ? `  comment="${commentBody.slice(0, 60).replace(/\n/g, ' ')}${commentBody.length > 60 ? '…' : ''}"` : '')
-      );
+      jsonEntries.push(base);
+      if (!json) {
+        console.log(
+          `  • [${entry.index}] ${entry.resolvedOrg}/${entry.issueKey}  ${human}  started=${started}` +
+            (commentBody ? `  comment="${commentBody.slice(0, 60).replace(/\n/g, ' ')}${commentBody.length > 60 ? '…' : ''}"` : '')
+        );
+      }
       continue;
     }
 
@@ -99,25 +148,39 @@ export async function runWorklog(opts: WorklogOptions): Promise<void> {
         comment: commentBody,
         visibility: entry.visibility,
       });
-      console.log(`  ✓ [${entry.index}] ${entry.issueKey}  ${human}  (id=${res.id})`);
-      results.push({ entry, ok: true, id: res.id });
+      okCount++;
+      jsonEntries.push({ ...base, ok: true, id: res.id });
+      if (!json) console.log(`  ✓ [${entry.index}] ${entry.issueKey}  ${human}  (id=${res.id})`);
     } catch (err) {
       const message = (err as Error).message;
-      console.log(`  ✗ [${entry.index}] ${entry.issueKey}  ${human}  failed: ${message.split('\n')[0]}`);
-      results.push({ entry, ok: false, error: message });
+      failCount++;
+      jsonEntries.push({ ...base, ok: false, error: message });
+      if (!json) console.log(`  ✗ [${entry.index}] ${entry.issueKey}  ${human}  failed: ${message.split('\n')[0]}`);
     }
   }
 
   if (opts.dryRun) {
-    console.log('');
-    console.log('(dry-run — no worklogs posted)');
+    if (json) {
+      console.log(JSON.stringify({ ok: true, dryRun: true, worklogs: jsonEntries }, null, 2));
+    } else {
+      console.log('');
+      console.log('(dry-run — no worklogs posted)');
+    }
     return;
   }
 
-  const okCount = results.filter((r) => r.ok).length;
-  const failCount = results.length - okCount;
-  console.log('');
-  console.log(`Summary: ${okCount} posted, ${failCount} failed.`);
+  if (json) {
+    console.log(
+      JSON.stringify(
+        { ok: failCount === 0, dryRun: false, worklogs: jsonEntries, summary: { posted: okCount, failed: failCount } },
+        null,
+        2
+      )
+    );
+  } else {
+    console.log('');
+    console.log(`Summary: ${okCount} posted, ${failCount} failed.`);
+  }
   if (failCount > 0) {
     process.exitCode = 1;
   }

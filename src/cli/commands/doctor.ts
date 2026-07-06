@@ -1,7 +1,12 @@
 import { intro, outro, note } from '@clack/prompts';
 import { checkFfmpeg, resolveFfmpegBinary } from 'framewise';
 import { detectOS, getFfmpegInstallHint } from '../../lib/platform.js';
-import { readConfig, resolveConfigPath, loadProfile } from '../../lib/config.js';
+import {
+  readConfig,
+  resolveConfigPath,
+  loadProfile,
+  findOrgsByProjectKey,
+} from '../../lib/config.js';
 import { JiraClient } from '../../lib/jiraClient.js';
 import { getToken } from '../../lib/credentials.js';
 
@@ -115,10 +120,14 @@ async function checkJiraOrg(orgName: string, project?: string): Promise<CheckRes
     const raw = readConfig();
     const orgRaw = raw.orgs?.[orgName];
     if (!orgRaw) {
+      const available = Object.keys(raw.orgs ?? {});
       return {
         name: label,
         severity: 'fail',
         detail: `org "${orgName}" not found in config`,
+        hint: available.length
+          ? `Available orgs: ${available.join(', ')}`
+          : 'Run `jirallm init` to create one.',
       };
     }
     if (project) {
@@ -162,10 +171,9 @@ async function checkJiraOrg(orgName: string, project?: string): Promise<CheckRes
 
 async function checkJira(org?: string, project?: string): Promise<CheckResult[]> {
   if (org) return [await checkJiraOrg(org, project)];
-  let orgs: string[];
+  let raw: ReturnType<typeof readConfig>;
   try {
-    const raw = readConfig();
-    orgs = Object.keys(raw.orgs ?? {});
+    raw = readConfig();
   } catch (err) {
     return [
       {
@@ -175,6 +183,7 @@ async function checkJira(org?: string, project?: string): Promise<CheckResult[]>
       },
     ];
   }
+  const orgs = Object.keys(raw.orgs ?? {});
   if (orgs.length === 0) {
     return [
       {
@@ -185,13 +194,26 @@ async function checkJira(org?: string, project?: string): Promise<CheckResult[]>
       },
     ];
   }
+  if (project) {
+    const matches = findOrgsByProjectKey(project, raw);
+    if (matches.length === 0) {
+      return [
+        {
+          name: `Jira reachable [${project}]`,
+          severity: 'fail',
+          detail: `project "${project}" not found in any configured org`,
+          hint: `Available orgs: ${orgs.join(', ')}`,
+        },
+      ];
+    }
+    return Promise.all(matches.map((name) => checkJiraOrg(name, project)));
+  }
   return Promise.all(orgs.map((name) => checkJiraOrg(name)));
 }
 
-export async function runDoctor(opts: { org?: string; project?: string } = {}): Promise<void> {
-  intro('jirallm doctor');
-  note(`OS: ${detectOS()}`, 'Environment');
-
+export async function runDoctor(
+  opts: { org?: string; project?: string; strict?: boolean; json?: boolean } = {}
+): Promise<void> {
   const results: CheckResult[] = [];
   results.push(checkNode());
   results.push(await checkFfmpegStatus());
@@ -199,12 +221,22 @@ export async function runDoctor(opts: { org?: string; project?: string } = {}): 
   results.push(checkConfig());
   results.push(...(await checkJira(opts.org, opts.project)));
 
-  for (const r of results) printResult(r);
+  if (opts.json) {
+    process.stdout.write(`${JSON.stringify(results)}\n`);
+  } else {
+    intro('jirallm doctor');
+    note(`OS: ${detectOS()}`, 'Environment');
+    for (const r of results) printResult(r);
+  }
 
   const failed = results.some((r) => r.severity === 'fail');
-  if (failed) {
-    outro('Doctor found blocking issues.');
+  const warned = results.some((r) => r.severity === 'warn');
+  const blocking = failed || (opts.strict === true && warned);
+  if (blocking) {
+    if (!opts.json) {
+      outro(failed ? 'Doctor found blocking issues.' : 'Doctor found warnings (strict mode).');
+    }
     process.exit(1);
   }
-  outro('Doctor finished.');
+  if (!opts.json) outro('Doctor finished.');
 }

@@ -21,6 +21,7 @@
     "lint": "eslint src",
     "test": "vitest run --bail=5",
     "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage --coverage.provider=v8 --coverage.include='src/**/*.ts' --coverage.exclude='src/**/*.test.ts'",
     "prepublishOnly": "pnpm build && pnpm test",
     "release": "doryski-release"
   },
@@ -77,6 +78,7 @@
     "@types/iarna__toml": "^2.0.5",
     "@types/node": "^22.0.0",
     "@types/update-notifier": "^6.0.8",
+    "@vitest/coverage-v8": "^4.1.10",
     "eslint": "^10.2.0",
     "tsx": "^4.0.0",
     "typescript": "^5.6.0",
