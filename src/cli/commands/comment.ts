@@ -45,6 +45,10 @@ function commentSnippet(client: JiraClient, comment: JiraComment, max = 200): st
   return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
+function commentBody(client: JiraClient, comment: JiraComment): string {
+  return client.convertADFToMarkdown(comment.body).trim();
+}
+
 export async function runComment(issueKeyArg: string, opts: CommentOptions): Promise<void> {
   const parsed = parseIssueKey(issueKeyArg);
   const org = resolveOrg(parsed.org, opts.org, parsed.projectKey);
@@ -129,6 +133,7 @@ export async function runCommentList(
         author: c.author.displayName,
         created: c.created,
         snippet: commentSnippet(client, c),
+        body: commentBody(client, c),
       })),
     });
     return;

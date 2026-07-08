@@ -555,6 +555,53 @@ describe('JiraClient.fetchIssueDetails — network gating', () => {
     const task = await client.fetchIssueDetails('PROJ-1');
     expect(task.worklogs).toBeUndefined();
   });
+
+  it('populates task.comments with full body when comments are included (default)', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      let body: unknown;
+      if (url.endsWith('/field')) body = [];
+      else if (url.includes('expand=changelog')) body = { changelog: { histories: [] } };
+      else if (url.includes('/comment')) {
+        body = {
+          comments: [
+            {
+              id: 'c-1',
+              author: { displayName: 'Alice' },
+              created: '2026-05-20T10:00:00.000+0200',
+              body: 'full comment body',
+            },
+          ],
+          total: 1,
+          maxResults: 100,
+          startAt: 0,
+        };
+      } else body = makeIssueResponse({});
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => body,
+      } as unknown as Response;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new JiraClient(FAKE_CONFIG, 'token');
+    const task = await client.fetchIssueDetails('PROJ-1');
+    expect(task.comments).toEqual([
+      {
+        id: 'c-1',
+        author: 'Alice',
+        created: '2026-05-20T10:00:00.000+0200',
+        body: 'full comment body',
+      },
+    ]);
+  });
+
+  it('leaves comments undefined when includeComments is false', async () => {
+    installUrlTracker();
+    const client = new JiraClient(FAKE_CONFIG, 'token');
+    const task = await client.fetchIssueDetails('PROJ-1', { includeComments: false });
+    expect(task.comments).toBeUndefined();
+  });
 });
 
 describe('JiraClient.mergeHistory — comment identity', () => {

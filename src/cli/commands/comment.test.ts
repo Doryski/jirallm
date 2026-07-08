@@ -185,4 +185,16 @@ describe('runCommentList', () => {
     expect(parsed.comments).toHaveLength(2);
     expect(parsed.comments[0]).toMatchObject({ id: '1', author: 'Alice', snippet: 'hello world' });
   });
+
+  it('--json includes the full comment body (not just a snippet)', async () => {
+    const long = 'x'.repeat(500);
+    fetchIssueCommentsMock.mockResolvedValue([
+      { id: '1', author: { displayName: 'Alice' }, created: '2026-01-01', body: long },
+    ]);
+    await runCommentList('PROJ-1', { json: true });
+    const parsed = JSON.parse(writes.join(''));
+    expect(parsed.comments[0].body).toBe(long);
+    expect(parsed.comments[0].snippet.endsWith('…')).toBe(true);
+    expect(parsed.comments[0].snippet.length).toBeLessThan(long.length);
+  });
 });

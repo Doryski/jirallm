@@ -262,6 +262,7 @@ export type JiraTaskData = {
   customFields?: Record<string, unknown>;
   attachments: Array<{ id: string; filename: string; url: string; size: number }>;
   history: HistoryEntry[];
+  comments?: Array<{ id: string; author: string; created: string; body: string }>;
   worklogs?: WorklogSummary[];
 };
 
@@ -743,6 +744,15 @@ export class JiraClient {
       storyPointsFieldId,
       customFieldDefs: options.customFieldDefs ?? {},
     });
+
+    if (includeComments) {
+      task.comments = comments.map((comment) => ({
+        id: comment.id,
+        author: comment.author.displayName,
+        created: comment.created,
+        body: this.convertADFToMarkdown(comment.body, attachmentMetadata),
+      }));
+    }
 
     if (options.includeWorklog) task.worklogs = await this.fetchIssueWorklogs(issueKey);
 
