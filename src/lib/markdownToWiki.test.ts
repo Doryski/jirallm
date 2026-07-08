@@ -43,6 +43,15 @@ describe('markdownToWiki — inline formatting', () => {
     expect(markdownToWiki('see [docs](https://example.com)')).toBe('see [docs|https://example.com]');
   });
 
+  it('converts image ![alt](file) to a wiki embed !file! (not the broken ![alt|file])', () => {
+    expect(markdownToWiki('![hint](shot.png)')).toBe('!shot.png!');
+    expect(markdownToWiki('![](a.png)')).toBe('!a.png!');
+  });
+
+  it('leaves a regular link untouched by the image rule', () => {
+    expect(markdownToWiki('[a](b.png)')).toBe('[a|b.png]');
+  });
+
   it('handles bold and italic in same paragraph', () => {
     expect(markdownToWiki('**bold** and *italic*')).toBe('*bold* and _italic_');
   });

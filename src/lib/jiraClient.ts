@@ -486,7 +486,9 @@ export class JiraClient {
           const att = unmatchedAttachments.shift()!;
           return formatMediaLink(att.filename);
         }
-        return '';
+        if (filename) return formatMediaLink(filename);
+        const mediaId = node.attrs.id;
+        return mediaId ? `![embedded media](media/${mediaId})` : '![embedded media]()';
       }
 
       if (node.type === 'mediaSingle' && node.content) {

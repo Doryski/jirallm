@@ -12,12 +12,14 @@ const addCommentMock = vi.fn();
 const deleteCommentMock = vi.fn();
 const getCommentMock = vi.fn();
 const fetchIssueCommentsMock = vi.fn();
+const uploadAttachmentMock = vi.fn();
 vi.mock('../../lib/jiraClient.js', () => ({
   JiraClient: class {
     addComment = addCommentMock;
     deleteComment = deleteCommentMock;
     getComment = getCommentMock;
     fetchIssueComments = fetchIssueCommentsMock;
+    uploadAttachment = uploadAttachmentMock;
     convertADFToMarkdown = (body: unknown) => (typeof body === 'string' ? body : '');
   },
 }));
@@ -47,6 +49,7 @@ beforeEach(() => {
   deleteCommentMock.mockReset();
   getCommentMock.mockReset();
   fetchIssueCommentsMock.mockReset();
+  uploadAttachmentMock.mockReset();
   confirmOrAbortMock.mockReset();
   addCommentMock.mockResolvedValue({ id: 'new-1' });
   confirmOrAbortMock.mockResolvedValue(true);
@@ -152,6 +155,38 @@ describe('runComment', () => {
     await runComment('PROJ-1', { text: 'hello', noWiki: true, dryRun: true });
     expect(addCommentMock).not.toHaveBeenCalled();
     expect(logs.join('\n')).toContain('dry-run');
+  });
+
+  it('--attach uploads files and embeds them (images as thumbnails, others as links)', async () => {
+    uploadAttachmentMock.mockImplementation(async (_key: string, file: string) => [
+      { id: `id-${file}`, filename: file.split('/').pop(), size: 1 },
+    ]);
+    await runComment('PROJ-1', {
+      text: 'summary body',
+      noWiki: true,
+      attach: ['/tmp/shot.png', '/tmp/verification.md'],
+    });
+    expect(uploadAttachmentMock).toHaveBeenCalledTimes(2);
+    const posted = addCommentMock.mock.calls.map((c) => c[1] as string).join('\n');
+    expect(posted).toContain('summary body');
+    expect(posted).toContain('!shot.png|thumbnail!');
+    expect(posted).toContain('[^verification.md]');
+  });
+
+  it('--attach in dry-run embeds by basename without uploading', async () => {
+    await runComment('PROJ-1', {
+      text: 'summary body',
+      noWiki: true,
+      dryRun: true,
+      json: true,
+      attach: ['/tmp/shot.png'],
+    });
+    expect(uploadAttachmentMock).not.toHaveBeenCalled();
+    const parsed = JSON.parse(writes.join(''));
+    expect(parsed.attachments).toEqual(['shot.png']);
+    expect(parsed.chunks.map((c: { body: string }) => c.body).join('\n')).toContain(
+      '!shot.png|thumbnail!'
+    );
   });
 });
 

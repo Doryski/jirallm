@@ -479,6 +479,10 @@ program
   .option('--no-wiki', 'Skip markdown→wiki conversion (post body as-is)')
   .option('--reply-to <commentId>', 'Post as reply to an existing comment (threaded)')
   .option('--no-thread', 'When posting multiple chunks, do not chain them as replies')
+  .option(
+    '--attach <files...>',
+    'Upload files and embed them at the end of the comment (images as thumbnails, others as attachment links)'
+  )
   .option('--dry-run', 'Show what would be posted without calling Jira')
   .option('--json', 'Output JSON instead of human-readable')
   .action(
@@ -492,6 +496,7 @@ program
         wiki?: boolean;
         thread?: boolean;
         replyTo?: string;
+        attach?: string[];
         dryRun?: boolean;
         json?: boolean;
       }
@@ -505,6 +510,7 @@ program
           noWiki: opts.wiki === false,
           noThread: opts.thread === false,
           replyTo: opts.replyTo,
+          attach: opts.attach,
           dryRun: opts.dryRun,
           json: opts.json,
         });
@@ -522,6 +528,7 @@ Examples:
   $ cat summary.md | jirallm comment PROJ-123
   $ jirallm comment PROJ-123 --file ./summary.md --dry-run
   $ jirallm comment PROJ-123 --reply-to 10001 -t "follow-up"
+  $ jirallm comment PROJ-123 --file ./summary.md --attach shot.png verification.md
 `
   );
 

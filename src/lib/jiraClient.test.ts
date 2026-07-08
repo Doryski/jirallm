@@ -829,6 +829,13 @@ describe('JiraClient.convertADFToMarkdown', () => {
     expect(out).toBe('![image](attachments/real.png)\n');
   });
 
+  it('shows a visible marker for wiki-embedded media (id only, no alt, no attachments)', () => {
+    const out = client.convertADFToMarkdown(
+      doc(paragraph({ type: 'media', attrs: { id: 'b5739fcc-uuid', type: 'file' } })) as never
+    );
+    expect(out).toBe('![embedded media](media/b5739fcc-uuid)\n');
+  });
+
   it('resolves inlineCard urls to attachment links when the id matches', () => {
     const out = client.convertADFToMarkdown(
       doc(

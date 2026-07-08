@@ -1,4 +1,5 @@
 import { readFileSync } from 'fs';
+import { basename } from 'path';
 import { loadProfile } from '../../lib/config.js';
 import { JiraClient, type JiraComment } from '../../lib/jiraClient.js';
 import { markdownToWiki } from '../../lib/markdownToWiki.js';
@@ -17,8 +18,16 @@ export type CommentOptions = {
   dryRun?: boolean;
   replyTo?: string;
   noThread?: boolean;
+  attach?: string[];
   json?: boolean;
 };
+
+const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp']);
+
+function embedForAttachment(filename: string): string {
+  const ext = filename.split('.').pop()?.toLowerCase() ?? '';
+  return IMAGE_EXTENSIONS.has(ext) ? `!${filename}|thumbnail!` : `[^${filename}]`;
+}
 
 export type DeleteCommentOptions = {
   org?: string;
@@ -66,6 +75,21 @@ export async function runComment(issueKeyArg: string, opts: CommentOptions): Pro
   const profile = await loadProfile({ org, project: parsed.projectKey });
   const client = new JiraClient(profile.config, profile.apiToken);
 
+  const attachFiles = opts.attach ?? [];
+  let attachedNames: string[] = [];
+  if (attachFiles.length > 0) {
+    if (opts.dryRun) {
+      attachedNames = attachFiles.map((f) => basename(f));
+    } else {
+      for (const file of attachFiles) {
+        const uploaded = await client.uploadAttachment(parsed.key, file);
+        for (const a of uploaded) attachedNames.push(a.filename);
+      }
+    }
+    const embeds = attachedNames.map(embedForAttachment).join('\n');
+    rawBody = `${rawBody.replace(/\s+$/, '')}\n\n${embeds}\n`;
+  }
+
   const maxChars = opts.maxChars ? parseInt(opts.maxChars, 10) : DEFAULT_MAX_CHARS;
   const rawChunks = splitIntoChunks(rawBody, maxChars);
   const chunks = opts.noWiki ? rawChunks : rawChunks.map((c) => markdownToWiki(c));
@@ -80,7 +104,7 @@ export async function runComment(issueKeyArg: string, opts: CommentOptions): Pro
       return { index: i + 1, total: chunks.length, chars: fullBody.length, parent: rootId, body: fullBody };
     });
     if (asJson) {
-      printJson({ dryRun: true, issueKey: parsed.key, org, chunks: previews });
+      printJson({ dryRun: true, issueKey: parsed.key, org, attachments: attachedNames, chunks: previews });
       return;
     }
     console.log(`Posting ${chunks.length} comment(s) to ${parsed.key} on ${org}...`);
@@ -111,7 +135,7 @@ export async function runComment(issueKeyArg: string, opts: CommentOptions): Pro
     prevId = result.id;
   }
 
-  if (asJson) printJson({ issueKey: parsed.key, org, posted });
+  if (asJson) printJson({ issueKey: parsed.key, org, attachments: attachedNames, posted });
 }
 
 export async function runCommentList(
