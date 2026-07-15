@@ -231,6 +231,37 @@ describe('runEditComment', () => {
     await expect(runEditComment('PROJ-1', '55', { text: '   ' })).rejects.toThrow('Empty comment body');
     expect(updateCommentMock).not.toHaveBeenCalled();
   });
+
+  it('--attach uploads files and appends embeds to the updated body', async () => {
+    uploadAttachmentMock.mockImplementation(async (_key: string, file: string) => [
+      { id: `id-${file}`, filename: file.split('/').pop(), size: 1 },
+    ]);
+    await runEditComment('PROJ-1', '55', {
+      text: 'updated body',
+      noWiki: true,
+      attach: ['/tmp/after-proof.png', '/tmp/report.md'],
+    });
+    expect(uploadAttachmentMock).toHaveBeenCalledTimes(2);
+    const body = updateCommentMock.mock.calls[0][2] as string;
+    expect(body).toContain('updated body');
+    expect(body).toContain('!after-proof.png|thumbnail!');
+    expect(body).toContain('[^report.md]');
+  });
+
+  it('--attach in dry-run embeds by basename without uploading', async () => {
+    await runEditComment('PROJ-1', '55', {
+      text: 'updated body',
+      noWiki: true,
+      dryRun: true,
+      json: true,
+      attach: ['/tmp/after-proof.png'],
+    });
+    expect(uploadAttachmentMock).not.toHaveBeenCalled();
+    expect(updateCommentMock).not.toHaveBeenCalled();
+    const parsed = JSON.parse(writes.join(''));
+    expect(parsed.attachments).toEqual(['after-proof.png']);
+    expect(parsed.body).toContain('!after-proof.png|thumbnail!');
+  });
 });
 
 describe('runCommentList', () => {

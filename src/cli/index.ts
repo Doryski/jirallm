@@ -688,13 +688,17 @@ program
   .option('-f, --file <path>', 'Read the new comment body (markdown) from a file')
   .option('-t, --text <text>', 'New comment body (markdown) as a string')
   .option('--no-wiki', 'Send the body as-is (skip markdown → wiki conversion)')
+  .option(
+    '--attach <files...>',
+    'Upload files and embed them at the end of the comment (images as thumbnails, others as attachment links)'
+  )
   .option('--dry-run', 'Show the new body without calling Jira')
   .option('--json', 'Output JSON instead of human-readable')
   .action(
     async (
       issueKey: string,
       commentId: string,
-      opts: { org?: string; file?: string; text?: string; wiki?: boolean; dryRun?: boolean; json?: boolean }
+      opts: { org?: string; file?: string; text?: string; wiki?: boolean; attach?: string[]; dryRun?: boolean; json?: boolean }
     ) => {
       try {
         await runEditComment(issueKey, commentId, {
@@ -702,6 +706,7 @@ program
           file: opts.file,
           text: opts.text,
           noWiki: opts.wiki === false,
+          attach: opts.attach,
           dryRun: opts.dryRun,
           json: opts.json,
         });
@@ -715,10 +720,12 @@ program
     `
 The new body is read from --file, then --text, then stdin (in that order).
 Markdown is converted to Jira wiki markup unless --no-wiki is passed.
+--attach uploads new files and appends embeds to the body (existing attachments are kept).
 
 Examples:
   $ jirallm comment:edit PROJ-123 26215 --text "Updated note"
   $ jirallm comment:edit PROJ-123 26215 --file ./fixed.md
+  $ jirallm comment:edit PROJ-123 26215 --file ./qa.md --attach after-proof.png
   $ echo "new body" | jirallm comment:edit acme/PROJ-123 26215
   $ jirallm comment:edit PROJ-123 26215 --text "wip" --dry-run --json
 `

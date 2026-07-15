@@ -223,7 +223,7 @@ Mutations (all accept `--dry-run`):
 ```bash
 jirallm comment PROJ-123 --file ./summary.md
 jirallm comment:ls PROJ-123 --json
-jirallm comment:edit PROJ-123 26215 --file ./fixed.md
+jirallm comment:edit PROJ-123 26215 --file ./fixed.md --attach after-proof.png
 jirallm comment:rm PROJ-123 26215 --yes
 jirallm transition PROJ-123 --to "In Review"
 jirallm worklog -f ./worklogs.json

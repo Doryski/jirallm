@@ -29,6 +29,27 @@ function embedForAttachment(filename: string): string {
   return IMAGE_EXTENSIONS.has(ext) ? `!${filename}|thumbnail!` : `[^${filename}]`;
 }
 
+async function applyAttachments(
+  client: JiraClient,
+  issueKey: string,
+  rawBody: string,
+  attachFiles: string[],
+  dryRun: boolean
+): Promise<{ body: string; attachedNames: string[] }> {
+  if (attachFiles.length === 0) return { body: rawBody, attachedNames: [] };
+  const attachedNames: string[] = [];
+  if (dryRun) {
+    for (const file of attachFiles) attachedNames.push(basename(file));
+  } else {
+    for (const file of attachFiles) {
+      const uploaded = await client.uploadAttachment(issueKey, file);
+      for (const a of uploaded) attachedNames.push(a.filename);
+    }
+  }
+  const embeds = attachedNames.map(embedForAttachment).join('\n');
+  return { body: `${rawBody.replace(/\s+$/, '')}\n\n${embeds}\n`, attachedNames };
+}
+
 export type DeleteCommentOptions = {
   org?: string;
   dryRun?: boolean;
@@ -46,6 +67,7 @@ export type EditCommentOptions = {
   text?: string;
   org?: string;
   noWiki?: boolean;
+  attach?: string[];
   dryRun?: boolean;
   json?: boolean;
 };
@@ -84,20 +106,9 @@ export async function runComment(issueKeyArg: string, opts: CommentOptions): Pro
   const profile = await loadProfile({ org, project: parsed.projectKey });
   const client = new JiraClient(profile.config, profile.apiToken);
 
-  const attachFiles = opts.attach ?? [];
-  let attachedNames: string[] = [];
-  if (attachFiles.length > 0) {
-    if (opts.dryRun) {
-      attachedNames = attachFiles.map((f) => basename(f));
-    } else {
-      for (const file of attachFiles) {
-        const uploaded = await client.uploadAttachment(parsed.key, file);
-        for (const a of uploaded) attachedNames.push(a.filename);
-      }
-    }
-    const embeds = attachedNames.map(embedForAttachment).join('\n');
-    rawBody = `${rawBody.replace(/\s+$/, '')}\n\n${embeds}\n`;
-  }
+  const applied = await applyAttachments(client, parsed.key, rawBody, opts.attach ?? [], !!opts.dryRun);
+  rawBody = applied.body;
+  const attachedNames = applied.attachedNames;
 
   const maxChars = opts.maxChars ? parseInt(opts.maxChars, 10) : DEFAULT_MAX_CHARS;
   const rawChunks = splitIntoChunks(rawBody, maxChars);
@@ -207,12 +218,14 @@ export async function runEditComment(
   const client = new JiraClient(profile.config, profile.apiToken);
 
   const existing = await client.getComment(parsed.key, commentId);
-  const body = opts.noWiki ? rawBody : markdownToWiki(rawBody);
+  const applied = await applyAttachments(client, parsed.key, rawBody, opts.attach ?? [], !!opts.dryRun);
+  const body = opts.noWiki ? applied.body : markdownToWiki(applied.body);
+  const attachedNames = applied.attachedNames;
   const asJson = shouldOutputJson(opts);
 
   if (opts.dryRun) {
     if (asJson) {
-      printJson({ dryRun: true, issueKey: parsed.key, org, id: existing.id, chars: body.length, body });
+      printJson({ dryRun: true, issueKey: parsed.key, org, id: existing.id, attachments: attachedNames, chars: body.length, body });
       return;
     }
     console.log(`Dry run — would update comment ${existing.id} on ${parsed.key} (${body.length} chars):`);
@@ -224,7 +237,7 @@ export async function runEditComment(
   await client.updateComment(parsed.key, commentId, body);
 
   if (asJson) {
-    printJson({ issueKey: parsed.key, org, id: existing.id, updated: true });
+    printJson({ issueKey: parsed.key, org, id: existing.id, attachments: attachedNames, updated: true });
     return;
   }
   console.log(`✓ Updated comment ${existing.id} on ${parsed.key}`);
