@@ -176,6 +176,22 @@ describe('runEdit', () => {
     expect(JSON.parse(writes.join(''))).toEqual({ issueKey: 'PROJ-1', updated: true });
   });
 
+  it('passes --parent and --due through to editIssue', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runEdit({ issueKey: 'PROJ-1', parent: 'PROJ-9', due: '2026-08-01' });
+    expect(editIssueMock.mock.calls[0][1].parentKey).toBe('PROJ-9');
+    expect(editIssueMock.mock.calls[0][1].dueDate).toBe('2026-08-01');
+  });
+
+  it('echoes --parent and --due on --dry-run without calling editIssue', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runEdit({ issueKey: 'PROJ-1', parent: 'PROJ-9', due: '2026-08-01', dryRun: true, json: true });
+    expect(editIssueMock).not.toHaveBeenCalled();
+    const parsed = JSON.parse(writes.join(''));
+    expect(parsed.fields.parentKey).toBe('PROJ-9');
+    expect(parsed.fields.dueDate).toBe('2026-08-01');
+  });
+
   it('parses --components and resolves --field via custom field defs', async () => {
     Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
     await runEdit({

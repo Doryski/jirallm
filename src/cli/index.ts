@@ -13,7 +13,12 @@ import { runAuthSet, runAuthRm, runAuthList, runAuthStatus } from './commands/au
 import { runOrgsList, runOrgsRemove, runProjectRemove } from './commands/orgs.js';
 import { runDoctor } from './commands/doctor.js';
 import { runSetup } from './commands/setup.js';
-import { runComment, runCommentList, runDeleteComment } from './commands/comment.js';
+import {
+  runComment,
+  runCommentList,
+  runDeleteComment,
+  runEditComment,
+} from './commands/comment.js';
 import { runBoardIssues } from './commands/board.js';
 import { runTransition } from './commands/transition.js';
 import { runWorklog } from './commands/worklog.js';
@@ -676,6 +681,49 @@ Examples:
 `
   );
 
+program
+  .command('comment:edit <issue-key> <comment-id>')
+  .description('Edit an existing comment (replaces its body).')
+  .option('-o, --org <name>', 'Organization name override')
+  .option('-f, --file <path>', 'Read the new comment body (markdown) from a file')
+  .option('-t, --text <text>', 'New comment body (markdown) as a string')
+  .option('--no-wiki', 'Send the body as-is (skip markdown → wiki conversion)')
+  .option('--dry-run', 'Show the new body without calling Jira')
+  .option('--json', 'Output JSON instead of human-readable')
+  .action(
+    async (
+      issueKey: string,
+      commentId: string,
+      opts: { org?: string; file?: string; text?: string; wiki?: boolean; dryRun?: boolean; json?: boolean }
+    ) => {
+      try {
+        await runEditComment(issueKey, commentId, {
+          org: opts.org,
+          file: opts.file,
+          text: opts.text,
+          noWiki: opts.wiki === false,
+          dryRun: opts.dryRun,
+          json: opts.json,
+        });
+      } catch (err) {
+        exitOnError(err);
+      }
+    }
+  )
+  .addHelpText(
+    'after',
+    `
+The new body is read from --file, then --text, then stdin (in that order).
+Markdown is converted to Jira wiki markup unless --no-wiki is passed.
+
+Examples:
+  $ jirallm comment:edit PROJ-123 26215 --text "Updated note"
+  $ jirallm comment:edit PROJ-123 26215 --file ./fixed.md
+  $ echo "new body" | jirallm comment:edit acme/PROJ-123 26215
+  $ jirallm comment:edit PROJ-123 26215 --text "wip" --dry-run --json
+`
+  );
+
 function jsonModeRequested(): boolean {
   return process.argv.includes('--json');
 }
@@ -1005,6 +1053,8 @@ program
   .option('--unassign', 'Unassign the issue (clears assignee)')
   .option('-l, --labels <list>', 'Comma-separated labels (replaces existing)')
   .option('--priority <name>', 'Priority name')
+  .option('--parent <key>', 'Parent issue key (reparent / set epic)')
+  .option('--due <date>', 'Due date (YYYY-MM-DD)')
   .option('--components <names>', 'Comma-separated component names (replaces existing)')
   .option(
     '-F, --field <pair>',
@@ -1013,7 +1063,7 @@ program
   )
   .option('--dry-run', 'Show what would change without calling Jira')
   .option('--json', 'Output JSON instead of human-readable')
-  .action(async (issueKey: string, opts: { org?: string; summary?: string; description?: string; descriptionFile?: string; assignee?: string; unassign?: boolean; labels?: string; priority?: string; components?: string; field?: string[]; dryRun?: boolean; json?: boolean }) => {
+  .action(async (issueKey: string, opts: { org?: string; summary?: string; description?: string; descriptionFile?: string; assignee?: string; unassign?: boolean; labels?: string; priority?: string; parent?: string; due?: string; components?: string; field?: string[]; dryRun?: boolean; json?: boolean }) => {
     try { await runEdit({ issueKey, ...opts }); } catch (err) { exitOnError(err); }
   })
   .addHelpText(
@@ -1027,6 +1077,7 @@ Examples:
   $ jirallm edit PROJ-123 --summary "New title"
   $ jirallm edit PROJ-123 --description-file ./updated.md
   $ jirallm edit PROJ-123 --labels backend,p1 --priority High
+  $ jirallm edit PROJ-123 --parent PROJ-1 --due 2026-08-01
   $ jirallm edit PROJ-123 --components Web,API --field reproductionRate=Always
   $ jirallm edit PROJ-123 --assignee 5ac1234567890abcdef
   $ jirallm edit PROJ-123 --unassign --dry-run --json

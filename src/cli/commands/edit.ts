@@ -17,6 +17,8 @@ export type EditOptions = {
   unassign?: boolean;
   labels?: string;
   priority?: string;
+  parent?: string;
+  due?: string;
   components?: string;
   field?: string[];
   dryRun?: boolean;
@@ -60,6 +62,8 @@ export async function runEdit(opts: EditOptions): Promise<void> {
     assigneeAccountId,
     labels,
     priority: opts.priority,
+    parentKey: opts.parent,
+    dueDate: opts.due,
     components,
     customFields,
   };

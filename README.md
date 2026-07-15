@@ -222,10 +222,13 @@ Mutations (all accept `--dry-run`):
 
 ```bash
 jirallm comment PROJ-123 --file ./summary.md
+jirallm comment:ls PROJ-123 --json
+jirallm comment:edit PROJ-123 26215 --file ./fixed.md
+jirallm comment:rm PROJ-123 26215 --yes
 jirallm transition PROJ-123 --to "In Review"
 jirallm worklog -f ./worklogs.json
 jirallm create --org acme --project PROJ --type Task --summary "Spike" --description-file ./spike.md
-jirallm edit PROJ-123 --labels a,b --priority High
+jirallm edit PROJ-123 --summary "New title" --labels a,b --priority High --parent PROJ-1 --due 2026-08-01
 jirallm assign PROJ-123 me
 jirallm link PROJ-1 "blocks" PROJ-2 --comment "blocked by infra work"
 jirallm link:rm 10042 --org acme

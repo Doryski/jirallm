@@ -9,6 +9,7 @@ vi.mock('../../lib/config.js', () => ({
 }));
 
 const addCommentMock = vi.fn();
+const updateCommentMock = vi.fn();
 const deleteCommentMock = vi.fn();
 const getCommentMock = vi.fn();
 const fetchIssueCommentsMock = vi.fn();
@@ -16,6 +17,7 @@ const uploadAttachmentMock = vi.fn();
 vi.mock('../../lib/jiraClient.js', () => ({
   JiraClient: class {
     addComment = addCommentMock;
+    updateComment = updateCommentMock;
     deleteComment = deleteCommentMock;
     getComment = getCommentMock;
     fetchIssueComments = fetchIssueCommentsMock;
@@ -29,7 +31,7 @@ vi.mock('../confirm.js', () => ({
   confirmOrAbort: (...args: unknown[]) => confirmOrAbortMock(...args),
 }));
 
-import { runComment, runCommentList, runDeleteComment } from './comment.js';
+import { runComment, runCommentList, runDeleteComment, runEditComment } from './comment.js';
 
 let logs: string[];
 let writes: string[];
@@ -46,6 +48,7 @@ beforeEach(() => {
     return true;
   });
   addCommentMock.mockReset();
+  updateCommentMock.mockReset();
   deleteCommentMock.mockReset();
   getCommentMock.mockReset();
   fetchIssueCommentsMock.mockReset();
@@ -187,6 +190,46 @@ describe('runComment', () => {
     expect(parsed.chunks.map((c: { body: string }) => c.body).join('\n')).toContain(
       '!shot.png|thumbnail!'
     );
+  });
+});
+
+describe('runEditComment', () => {
+  beforeEach(() => {
+    getCommentMock.mockResolvedValue({
+      id: '55',
+      author: { displayName: 'Alice' },
+      created: '2026-01-01',
+      body: 'old body',
+    });
+  });
+
+  it('updates the comment with wiki-converted body from --text', async () => {
+    await runEditComment('PROJ-1', '55', { text: '# Title' });
+    expect(getCommentMock).toHaveBeenCalledWith('PROJ-1', '55');
+    expect(updateCommentMock).toHaveBeenCalledWith('PROJ-1', '55', 'h1. Title');
+    expect(logs.join('\n')).toContain('Updated comment 55');
+  });
+
+  it('--no-wiki sends the body as-is', async () => {
+    await runEditComment('PROJ-1', '55', { text: '# Title', noWiki: true });
+    expect(updateCommentMock).toHaveBeenCalledWith('PROJ-1', '55', '# Title');
+  });
+
+  it('dry-run does not call updateComment', async () => {
+    await runEditComment('PROJ-1', '55', { text: 'new', noWiki: true, dryRun: true });
+    expect(updateCommentMock).not.toHaveBeenCalled();
+    expect(logs.join('\n')).toContain('dry-run');
+  });
+
+  it('--json outputs structured result', async () => {
+    await runEditComment('PROJ-1', '55', { text: 'new', noWiki: true, json: true });
+    const parsed = JSON.parse(writes.join(''));
+    expect(parsed).toMatchObject({ issueKey: 'PROJ-1', id: '55', updated: true });
+  });
+
+  it('throws on empty body', async () => {
+    await expect(runEditComment('PROJ-1', '55', { text: '   ' })).rejects.toThrow('Empty comment body');
+    expect(updateCommentMock).not.toHaveBeenCalled();
   });
 });
 

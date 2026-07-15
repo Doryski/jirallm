@@ -189,6 +189,14 @@ describe('JiraClient.editIssue', () => {
     expect(body.fields.customfield_10051).toEqual({ value: 'Always' });
   });
 
+  it('maps parentKey and dueDate on edit', async () => {
+    const { client, calls } = captureFetch(() => ({ status: 204 }));
+    await client.editIssue('PROJ-1', { parentKey: 'PROJ-9', dueDate: '2026-08-01' });
+    const body = calls[0].body as { fields: Record<string, unknown> };
+    expect(body.fields.parent).toEqual({ key: 'PROJ-9' });
+    expect(body.fields.duedate).toBe('2026-08-01');
+  });
+
   it('treats customFields/components as updatable fields (not "no fields")', async () => {
     const { client, calls } = captureFetch(() => ({ status: 204 }));
     await client.editIssue('PROJ-1', { customFields: { customfield_10051: 1 } });
@@ -525,6 +533,30 @@ describe('JiraClient.addComment', () => {
     }));
     await expect(client.addComment('PROJ-1', 'x')).rejects.toThrow(
       /addComment failed: 400 Bad Request\nbad body/
+    );
+  });
+});
+
+describe('JiraClient.updateComment', () => {
+  it('PUTs /rest/api/2/issue/{key}/comment/{id} with the new body', async () => {
+    const { client, calls } = captureFetch(() => ({ json: {} }));
+    await client.updateComment('PROJ-1', 'c-9', 'new *wiki*');
+    expect(calls[0].method).toBe('PUT');
+    expect(calls[0].url).toBe(
+      'https://example.atlassian.net/rest/api/2/issue/PROJ-1/comment/c-9'
+    );
+    expect(calls[0].body).toEqual({ body: 'new *wiki*' });
+  });
+
+  it('throws a descriptive error on non-OK', async () => {
+    const { client } = captureFetch(() => ({
+      ok: false,
+      status: 404,
+      statusText: 'Not Found',
+      text: 'gone',
+    }));
+    await expect(client.updateComment('PROJ-1', 'c-9', 'x')).rejects.toThrow(
+      /updateComment failed: 404 Not Found\ngone/
     );
   });
 });

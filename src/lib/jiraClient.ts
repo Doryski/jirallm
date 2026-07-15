@@ -1036,6 +1036,25 @@ export class JiraClient {
     return { id: json.id, issueId: json.issueId };
   }
 
+  async updateComment(issueKey: string, commentId: string, wikiBody: string): Promise<void> {
+    const url = `${this.config.baseUrl}/rest/api/2/issue/${issueKey}/comment/${commentId}`;
+    const response = await fetch(url, {
+      method: 'PUT',
+      headers: {
+        Authorization: this.authHeader,
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ body: wikiBody }),
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(
+        `Jira updateComment failed: ${response.status} ${response.statusText}\n${errorText}`
+      );
+    }
+  }
+
   async deleteComment(issueKey: string, commentId: string): Promise<void> {
     const url = `${this.config.baseUrl}/rest/api/2/issue/${issueKey}/comment/${commentId}`;
     const response = await fetch(url, {
@@ -1371,6 +1390,8 @@ export class JiraClient {
       assigneeAccountId?: string | null;
       labels?: string[];
       priority?: string;
+      parentKey?: string;
+      dueDate?: string;
       components?: string[];
       customFields?: Record<string, unknown>;
     }
@@ -1387,6 +1408,8 @@ export class JiraClient {
     }
     if (input.labels !== undefined) fields.labels = input.labels;
     if (input.priority !== undefined) fields.priority = { name: input.priority };
+    if (input.parentKey !== undefined) fields.parent = { key: input.parentKey };
+    if (input.dueDate !== undefined) fields.duedate = input.dueDate;
     if (input.components !== undefined) fields.components = input.components.map((name) => ({ name }));
     if (input.customFields !== undefined) Object.assign(fields, input.customFields);
 

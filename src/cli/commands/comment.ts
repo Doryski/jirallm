@@ -41,6 +41,15 @@ export type CommentListOptions = {
   json?: boolean;
 };
 
+export type EditCommentOptions = {
+  file?: string;
+  text?: string;
+  org?: string;
+  noWiki?: boolean;
+  dryRun?: boolean;
+  json?: boolean;
+};
+
 const DEFAULT_MAX_CHARS = 25000;
 
 function buildHeader(index: number, total: number, rootId?: string): string {
@@ -174,6 +183,51 @@ export async function runCommentList(
       `  ${c.id.padEnd(10)}  ${c.author.displayName.padEnd(20)}  ${commentSnippet(client, c, 80)}`
     );
   }
+}
+
+export async function runEditComment(
+  issueKeyArg: string,
+  commentId: string,
+  opts: EditCommentOptions
+): Promise<void> {
+  const parsed = parseIssueKey(issueKeyArg);
+  const org = resolveOrg(parsed.org, opts.org, parsed.projectKey);
+
+  let rawBody: string;
+  if (opts.file) {
+    rawBody = readFileSync(opts.file, 'utf-8');
+  } else if (opts.text) {
+    rawBody = opts.text;
+  } else {
+    rawBody = readFileSync(0, 'utf-8');
+  }
+  if (!rawBody.trim()) throw new Error('Empty comment body.');
+
+  const profile = await loadProfile({ org, project: parsed.projectKey });
+  const client = new JiraClient(profile.config, profile.apiToken);
+
+  const existing = await client.getComment(parsed.key, commentId);
+  const body = opts.noWiki ? rawBody : markdownToWiki(rawBody);
+  const asJson = shouldOutputJson(opts);
+
+  if (opts.dryRun) {
+    if (asJson) {
+      printJson({ dryRun: true, issueKey: parsed.key, org, id: existing.id, chars: body.length, body });
+      return;
+    }
+    console.log(`Dry run — would update comment ${existing.id} on ${parsed.key} (${body.length} chars):`);
+    console.log(body.slice(0, 300) + (body.length > 300 ? '\n...' : ''));
+    console.log('(dry-run — comment not updated)');
+    return;
+  }
+
+  await client.updateComment(parsed.key, commentId, body);
+
+  if (asJson) {
+    printJson({ issueKey: parsed.key, org, id: existing.id, updated: true });
+    return;
+  }
+  console.log(`✓ Updated comment ${existing.id} on ${parsed.key}`);
 }
 
 export async function runDeleteComment(
