@@ -8,6 +8,11 @@ import { JiraExporter } from '../lib/exporter.js';
 import { listOrgs, loadProfile } from '../lib/config.js';
 import { resolveOrgInteractive } from './resolveOrg.js';
 import { parseIssueKeyArgs } from './issueKey.js';
+import {
+  DEFAULT_IMAGE_LAYOUT,
+  DEFAULT_IMAGE_WIDTH,
+  IMAGE_LAYOUTS,
+} from '../lib/adfMedia.js';
 import { runInit } from './commands/init.js';
 import { runAuthSet, runAuthRm, runAuthList, runAuthStatus } from './commands/auth.js';
 import { runOrgsList, runOrgsRemove, runProjectRemove } from './commands/orgs.js';
@@ -474,7 +479,8 @@ Examples:
 `
   );
 
-program
+addImageOptions(
+  program
   .command('comment <issue-key>')
   .description('Post a (possibly multi-part) comment on a Jira issue. Markdown converted to Jira wiki by default.')
   .option('-f, --file <path>', 'Read comment body from a file')
@@ -486,10 +492,11 @@ program
   .option('--no-thread', 'When posting multiple chunks, do not chain them as replies')
   .option(
     '--attach <files...>',
-    'Upload files and embed them at the end of the comment (images as thumbnails, others as attachment links)'
+    'Upload files and embed them at the end of the comment (images as thumbnails — use --attach-images for full-size images)'
   )
   .option('--dry-run', 'Show what would be posted without calling Jira')
   .option('--json', 'Output JSON instead of human-readable')
+)
   .action(
     async (
       issueKey: string,
@@ -502,6 +509,9 @@ program
         thread?: boolean;
         replyTo?: string;
         attach?: string[];
+        attachImages?: string[];
+        imageLayout?: string;
+        imageWidth?: string;
         dryRun?: boolean;
         json?: boolean;
       }
@@ -516,6 +526,9 @@ program
           noThread: opts.thread === false,
           replyTo: opts.replyTo,
           attach: opts.attach,
+          attachImages: opts.attachImages,
+          imageLayout: opts.imageLayout,
+          imageWidth: opts.imageWidth,
           dryRun: opts.dryRun,
           json: opts.json,
         });
@@ -534,6 +547,8 @@ Examples:
   $ jirallm comment PROJ-123 --file ./summary.md --dry-run
   $ jirallm comment PROJ-123 --reply-to 10001 -t "follow-up"
   $ jirallm comment PROJ-123 --file ./summary.md --attach shot.png verification.md
+  $ jirallm comment PROJ-123 --file ./summary.md --attach-images shot.png:"New config field"
+  $ jirallm comment PROJ-123 -t "see below" --attach-images a.png b.png --image-layout center --image-width 80
 `
   );
 
@@ -681,7 +696,8 @@ Examples:
 `
   );
 
-program
+addImageOptions(
+  program
   .command('comment:edit <issue-key> <comment-id>')
   .description('Edit an existing comment (replaces its body).')
   .option('-o, --org <name>', 'Organization name override')
@@ -690,15 +706,27 @@ program
   .option('--no-wiki', 'Send the body as-is (skip markdown → wiki conversion)')
   .option(
     '--attach <files...>',
-    'Upload files and embed them at the end of the comment (images as thumbnails, others as attachment links)'
+    'Upload files and embed them at the end of the comment (images as thumbnails — use --attach-images for full-size images)'
   )
   .option('--dry-run', 'Show the new body without calling Jira')
   .option('--json', 'Output JSON instead of human-readable')
+)
   .action(
     async (
       issueKey: string,
       commentId: string,
-      opts: { org?: string; file?: string; text?: string; wiki?: boolean; attach?: string[]; dryRun?: boolean; json?: boolean }
+      opts: {
+        org?: string;
+        file?: string;
+        text?: string;
+        wiki?: boolean;
+        attach?: string[];
+        attachImages?: string[];
+        imageLayout?: string;
+        imageWidth?: string;
+        dryRun?: boolean;
+        json?: boolean;
+      }
     ) => {
       try {
         await runEditComment(issueKey, commentId, {
@@ -707,6 +735,9 @@ program
           text: opts.text,
           noWiki: opts.wiki === false,
           attach: opts.attach,
+          attachImages: opts.attachImages,
+          imageLayout: opts.imageLayout,
+          imageWidth: opts.imageWidth,
           dryRun: opts.dryRun,
           json: opts.json,
         });
@@ -726,6 +757,7 @@ Examples:
   $ jirallm comment:edit PROJ-123 26215 --text "Updated note"
   $ jirallm comment:edit PROJ-123 26215 --file ./fixed.md
   $ jirallm comment:edit PROJ-123 26215 --file ./qa.md --attach after-proof.png
+  $ jirallm comment:edit PROJ-123 26215 --file ./qa.md --attach-images after.png:"After the fix"
   $ echo "new body" | jirallm comment:edit acme/PROJ-123 26215
   $ jirallm comment:edit PROJ-123 26215 --text "wip" --dry-run --json
 `
@@ -752,6 +784,23 @@ function exitOnError(err: unknown): never {
 /** Commander collector for repeatable options (e.g. --field a=1 --field b=2). */
 function collect(value: string, previous: string[] = []): string[] {
   return [...previous, value];
+}
+
+/** Shared --attach-images / --image-* options (ADF mediaSingle embedding). */
+function addImageOptions(cmd: Command): Command {
+  return cmd
+    .option(
+      '--attach-images <spec...>',
+      'Upload images and embed them full-size as ADF mediaSingle. Format: file.png or file.png:"caption"'
+    )
+    .option(
+      '--image-layout <layout>',
+      `Layout for --attach-images: ${IMAGE_LAYOUTS.join('|')} (default: ${DEFAULT_IMAGE_LAYOUT})`
+    )
+    .option(
+      '--image-width <n>',
+      `Percent of container width for --attach-images, 1-100 (default: ${DEFAULT_IMAGE_WIDTH})`
+    );
 }
 
 program
@@ -984,9 +1033,14 @@ Examples:
 `
   );
 
-program
+addImageOptions(
+  program
   .command('create')
   .description('Create a new Jira issue.')
+  .option(
+    '--attach <files...>',
+    'Upload files and embed them at the end of the description (images as thumbnails)'
+  )
   .option('-o, --org <name>', 'Organization name (auto-resolved from the project key if unique)')
   .option('-P, --project <key>', 'Project key (auto-selected when the org has a single project)')
   .requiredOption('-t, --type <type>', 'Issue type name (e.g. Task, Bug, Story)')
@@ -1005,7 +1059,8 @@ program
   )
   .option('--dry-run', 'Show what would be created without calling Jira')
   .option('--json', 'Output JSON instead of human-readable')
-  .action(async (opts: { org?: string; project?: string; type: string; summary: string; description?: string; descriptionFile?: string; assignee?: string; labels?: string; priority?: string; parent?: string; components?: string; field?: string[]; dryRun?: boolean; json?: boolean }) => {
+)
+  .action(async (opts: { org?: string; project?: string; type: string; summary: string; description?: string; descriptionFile?: string; assignee?: string; labels?: string; priority?: string; parent?: string; components?: string; field?: string[]; attach?: string[]; attachImages?: string[]; imageLayout?: string; imageWidth?: string; dryRun?: boolean; json?: boolean }) => {
     try {
       await runCreate({
         org: opts.org,
@@ -1020,6 +1075,10 @@ program
         parent: opts.parent,
         components: opts.components,
         field: opts.field,
+        attach: opts.attach,
+        attachImages: opts.attachImages,
+        imageLayout: opts.imageLayout,
+        imageWidth: opts.imageWidth,
         dryRun: opts.dryRun,
         json: opts.json,
       });
@@ -1046,13 +1105,19 @@ Examples:
   $ jirallm create -o acme -t Sub-task -s "Subtask of PROJ-1" --parent PROJ-1
   $ jirallm create -o acme -t Bug -s "Crash" --components Web,API --field severity=High --field environment=PROD
   $ jirallm create -o acme -t Bug -s "test" --dry-run --json
+  $ jirallm create -o acme -t Bug -s "Crash" --description-file ./repro.md --attach-images repro.png:"Stack trace"
 `
   );
 
-program
+addImageOptions(
+  program
   .command('edit <issue-key>')
   .description('Edit fields on an existing Jira issue.')
   .option('-o, --org <name>', 'Organization name override')
+  .option(
+    '--attach <files...>',
+    'Upload files and embed them at the end of the new description (images as thumbnails)'
+  )
   .option('-s, --summary <text>', 'New summary')
   .option('-d, --description <text>', 'New description (markdown)')
   .option('--description-file <path>', 'Read description (markdown) from a file')
@@ -1070,7 +1135,8 @@ program
   )
   .option('--dry-run', 'Show what would change without calling Jira')
   .option('--json', 'Output JSON instead of human-readable')
-  .action(async (issueKey: string, opts: { org?: string; summary?: string; description?: string; descriptionFile?: string; assignee?: string; unassign?: boolean; labels?: string; priority?: string; parent?: string; due?: string; components?: string; field?: string[]; dryRun?: boolean; json?: boolean }) => {
+)
+  .action(async (issueKey: string, opts: { org?: string; summary?: string; description?: string; descriptionFile?: string; assignee?: string; unassign?: boolean; labels?: string; priority?: string; parent?: string; due?: string; components?: string; field?: string[]; attach?: string[]; attachImages?: string[]; imageLayout?: string; imageWidth?: string; dryRun?: boolean; json?: boolean }) => {
     try { await runEdit({ issueKey, ...opts }); } catch (err) { exitOnError(err); }
   })
   .addHelpText(
@@ -1088,6 +1154,10 @@ Examples:
   $ jirallm edit PROJ-123 --components Web,API --field reproductionRate=Always
   $ jirallm edit PROJ-123 --assignee 5ac1234567890abcdef
   $ jirallm edit PROJ-123 --unassign --dry-run --json
+  $ jirallm edit PROJ-123 --description-file ./updated.md --attach-images after.png:"After the fix"
+
+--attach / --attach-images only rewrite the description when --description/--description-file
+is also given; otherwise the files are uploaded and the description is left alone.
 `
   );
 

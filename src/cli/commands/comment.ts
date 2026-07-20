@@ -1,5 +1,4 @@
 import { readFileSync } from 'fs';
-import { basename } from 'path';
 import { loadProfile } from '../../lib/config.js';
 import { JiraClient, type JiraComment } from '../../lib/jiraClient.js';
 import { markdownToWiki } from '../../lib/markdownToWiki.js';
@@ -8,6 +7,8 @@ import { parseIssueKey } from '../issueKey.js';
 import { resolveOrg } from '../resolveOrg.js';
 import { printJson, shouldOutputJson } from '../jsonOutput.js';
 import { confirmOrAbort } from '../confirm.js';
+import { embedCommentImages, prepareAttachments, previewImages } from '../attachEmbeds.js';
+import { containsMarkers } from '../../lib/adfMedia.js';
 
 export type CommentOptions = {
   file?: string;
@@ -19,36 +20,11 @@ export type CommentOptions = {
   replyTo?: string;
   noThread?: boolean;
   attach?: string[];
+  attachImages?: string[];
+  imageLayout?: string;
+  imageWidth?: string;
   json?: boolean;
 };
-
-const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp']);
-
-function embedForAttachment(filename: string): string {
-  const ext = filename.split('.').pop()?.toLowerCase() ?? '';
-  return IMAGE_EXTENSIONS.has(ext) ? `!${filename}|thumbnail!` : `[^${filename}]`;
-}
-
-async function applyAttachments(
-  client: JiraClient,
-  issueKey: string,
-  rawBody: string,
-  attachFiles: string[],
-  dryRun: boolean
-): Promise<{ body: string; attachedNames: string[] }> {
-  if (attachFiles.length === 0) return { body: rawBody, attachedNames: [] };
-  const attachedNames: string[] = [];
-  if (dryRun) {
-    for (const file of attachFiles) attachedNames.push(basename(file));
-  } else {
-    for (const file of attachFiles) {
-      const uploaded = await client.uploadAttachment(issueKey, file);
-      for (const a of uploaded) attachedNames.push(a.filename);
-    }
-  }
-  const embeds = attachedNames.map(embedForAttachment).join('\n');
-  return { body: `${rawBody.replace(/\s+$/, '')}\n\n${embeds}\n`, attachedNames };
-}
 
 export type DeleteCommentOptions = {
   org?: string;
@@ -68,6 +44,9 @@ export type EditCommentOptions = {
   org?: string;
   noWiki?: boolean;
   attach?: string[];
+  attachImages?: string[];
+  imageLayout?: string;
+  imageWidth?: string;
   dryRun?: boolean;
   json?: boolean;
 };
@@ -106,7 +85,7 @@ export async function runComment(issueKeyArg: string, opts: CommentOptions): Pro
   const profile = await loadProfile({ org, project: parsed.projectKey });
   const client = new JiraClient(profile.config, profile.apiToken);
 
-  const applied = await applyAttachments(client, parsed.key, rawBody, opts.attach ?? [], !!opts.dryRun);
+  const applied = await prepareAttachments(client, parsed.key, rawBody, opts, !!opts.dryRun);
   rawBody = applied.body;
   const attachedNames = applied.attachedNames;
 
@@ -123,11 +102,25 @@ export async function runComment(issueKeyArg: string, opts: CommentOptions): Pro
       const fullBody = buildHeader(i, chunks.length, rootId) + chunk;
       return { index: i + 1, total: chunks.length, chars: fullBody.length, parent: rootId, body: fullBody };
     });
+    const embeddedImages = previewImages(applied.images, applied.layout);
     if (asJson) {
-      printJson({ dryRun: true, issueKey: parsed.key, org, attachments: attachedNames, chunks: previews });
+      printJson({
+        dryRun: true,
+        issueKey: parsed.key,
+        org,
+        attachments: attachedNames,
+        embeddedImages,
+        chunks: previews,
+      });
       return;
     }
     console.log(`Posting ${chunks.length} comment(s) to ${parsed.key} on ${org}...`);
+    for (const img of embeddedImages) {
+      const px = img.pixels ? ` ${img.pixels.width}x${img.pixels.height}px` : '';
+      console.log(
+        `  image: ${img.filename} (${img.layout}, ${img.width}%${px})${img.caption ? ` — "${img.caption}"` : ''}`
+      );
+    }
     for (const p of previews) {
       console.log(
         `--- chunk ${p.index}/${p.total} (${p.chars} chars)${p.parent ? ` reply→${p.parent}` : ''} ---`
@@ -147,6 +140,10 @@ export async function runComment(issueKeyArg: string, opts: CommentOptions): Pro
     const parentId = thread ? prevId : rootId;
     const result = await client.addComment(parsed.key, fullBody, parentId);
     posted.push({ id: result.id, index: i + 1, parent: parentId });
+    const chunkImages = applied.images.filter((img) => containsMarkers(fullBody, [img]));
+    if (chunkImages.length > 0) {
+      await embedCommentImages(client, parsed.key, result.id, chunkImages, applied.layout);
+    }
     if (!asJson) {
       console.log(
         `  ✓ Posted comment ${i + 1}/${chunks.length} (id=${result.id}${parentId ? `, parent=${parentId}` : ''})`
@@ -218,14 +215,23 @@ export async function runEditComment(
   const client = new JiraClient(profile.config, profile.apiToken);
 
   const existing = await client.getComment(parsed.key, commentId);
-  const applied = await applyAttachments(client, parsed.key, rawBody, opts.attach ?? [], !!opts.dryRun);
+  const applied = await prepareAttachments(client, parsed.key, rawBody, opts, !!opts.dryRun);
   const body = opts.noWiki ? applied.body : markdownToWiki(applied.body);
   const attachedNames = applied.attachedNames;
   const asJson = shouldOutputJson(opts);
 
   if (opts.dryRun) {
     if (asJson) {
-      printJson({ dryRun: true, issueKey: parsed.key, org, id: existing.id, attachments: attachedNames, chars: body.length, body });
+      printJson({
+        dryRun: true,
+        issueKey: parsed.key,
+        org,
+        id: existing.id,
+        attachments: attachedNames,
+        embeddedImages: previewImages(applied.images, applied.layout),
+        chars: body.length,
+        body,
+      });
       return;
     }
     console.log(`Dry run — would update comment ${existing.id} on ${parsed.key} (${body.length} chars):`);
@@ -235,6 +241,9 @@ export async function runEditComment(
   }
 
   await client.updateComment(parsed.key, commentId, body);
+  if (applied.images.length > 0) {
+    await embedCommentImages(client, parsed.key, commentId, applied.images, applied.layout);
+  }
 
   if (asJson) {
     printJson({ issueKey: parsed.key, org, id: existing.id, attachments: attachedNames, updated: true });

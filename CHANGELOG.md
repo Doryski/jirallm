@@ -4,6 +4,26 @@ All notable changes to `jirallm` are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `--attach-images <spec...>` on `comment`, `comment:edit`, `create` and `edit`: uploads images and
+  embeds them as ADF `mediaSingle` nodes instead of wiki thumbnails, so they can be sized and
+  aligned. Spec format is `file.png` or `file.png:"caption"`.
+- `--image-layout` (`center`, `align-start` (default), `align-end`, `wrap-left`, `wrap-right`,
+  `wide`, `full-width`) and `--image-width` (percent of container width, 1–100, default 50).
+- `--attach` on `create` and `edit` (embeds into the issue description).
+- Image pixel dimensions are read from the file header (PNG/JPEG/GIF/WEBP/BMP) and sent to Jira.
+
+### Notes
+
+- Content is still posted through REST v2 (wiki markup) so Jira keeps generating the ADF for tables,
+  code blocks and attachment cards; `jirallm` then rewrites only the marked images over REST v3.
+- Captions are emitted as an italic (`em`) paragraph directly after the image. ADF's `caption` node
+  is deliberately **not** used: Jira stores it but never renders it in comments (Confluence only).
+- `--attach` behaviour is unchanged (images still embed as `!file|thumbnail!`).
+
 ## [0.1.1] - 2026-05-03
 
 ### Changed

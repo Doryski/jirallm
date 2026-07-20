@@ -3,6 +3,7 @@ import { mkdir, readFile, stat } from 'fs/promises';
 import { basename, dirname } from 'path';
 import { pipeline } from 'stream/promises';
 import type { CustomFieldDefs } from './exportFields.js';
+import type { AdfDocument } from './adfMedia.js';
 import { markdownToWiki } from './markdownToWiki.js';
 
 export type JiraConfig = {
@@ -1051,6 +1052,51 @@ export class JiraClient {
       const errorText = await response.text();
       throw new Error(
         `Jira updateComment failed: ${response.status} ${response.statusText}\n${errorText}`
+      );
+    }
+  }
+
+  async updateCommentAdf(issueKey: string, commentId: string, adf: AdfDocument): Promise<void> {
+    const url = `${this.config.baseUrl}/rest/api/3/issue/${issueKey}/comment/${commentId}`;
+    const response = await fetch(url, {
+      method: 'PUT',
+      headers: {
+        Authorization: this.authHeader,
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ body: adf }),
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(
+        `Jira updateCommentAdf failed: ${response.status} ${response.statusText}\n${errorText}`
+      );
+    }
+  }
+
+  async getIssueDescriptionAdf(issueKey: string): Promise<unknown> {
+    const response = await this.makeRequest<{ fields: { description?: unknown } }>(
+      `/issue/${issueKey}?fields=description`
+    );
+    return response.fields.description;
+  }
+
+  async updateIssueDescriptionAdf(issueKey: string, adf: AdfDocument): Promise<void> {
+    const url = `${this.config.baseUrl}/rest/api/3/issue/${issueKey}`;
+    const response = await fetch(url, {
+      method: 'PUT',
+      headers: {
+        Authorization: this.authHeader,
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ fields: { description: adf } }),
+    });
+    if (!response.ok && response.status !== 204) {
+      const errorText = await response.text();
+      throw new Error(
+        `Jira updateIssueDescriptionAdf failed: ${response.status} ${response.statusText}\n${errorText}`
       );
     }
   }

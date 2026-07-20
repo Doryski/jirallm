@@ -224,6 +224,7 @@ Mutations (all accept `--dry-run`):
 jirallm comment PROJ-123 --file ./summary.md
 jirallm comment:ls PROJ-123 --json
 jirallm comment:edit PROJ-123 26215 --file ./fixed.md --attach after-proof.png
+jirallm comment PROJ-123 --file ./summary.md --attach-images shot.png:"New config field"
 jirallm comment:rm PROJ-123 26215 --yes
 jirallm transition PROJ-123 --to "In Review"
 jirallm worklog -f ./worklogs.json
@@ -236,6 +237,42 @@ jirallm attach PROJ-123 ./screenshot.png ./recording.mp4
 jirallm attach:rm 99021 --org acme
 jirallm watchers PROJ-123 --add me
 ```
+
+### Full-size images in comments and descriptions
+
+`--attach` embeds images as wiki thumbnails (`!file.png|thumbnail!`) — small, centered, and not
+resizable, because Jira's wiki markup has no way to set an image size. `--attach-images` uploads the
+same files but embeds them as ADF `mediaSingle` nodes instead, which do support layout and width:
+
+```bash
+jirallm comment PROJ-123 --file ./summary.md \
+  --attach-images shot.png:"New config field" flow.png \
+  --image-layout align-start --image-width 50
+
+jirallm comment:edit PROJ-123 26215 --file ./qa.md --attach-images after.png:"After the fix"
+jirallm create -o acme -t Bug -s "Crash" --description-file ./repro.md --attach-images repro.png
+jirallm edit PROJ-123 --description-file ./updated.md --attach-images after.png:"After the fix"
+```
+
+- Spec format: `file.png` or `file.png:"caption"` (captions may contain spaces and colons).
+- `--image-layout`: `center`, `align-start` (default), `align-end`, `wrap-left`, `wrap-right`,
+  `wide`, `full-width`.
+- `--image-width`: percent of the container width, `1`–`100` (default `50`).
+- Pixel dimensions are read from the file header (PNG/JPEG/GIF/WEBP/BMP) and passed to Jira.
+- Non-image files given to `--attach-images` fall back to attachment cards, like `--attach`.
+- `--attach` is unchanged, so existing scripts keep working.
+- On `jirallm edit`, files are uploaded but the description is only rewritten when
+  `--description`/`--description-file` is also given.
+
+How it works: the comment/description is posted through REST v2 (wiki markup) exactly as before, so
+Jira does the markdown→ADF conversion — tables, code blocks and attachment cards come out right.
+`jirallm` then reads the generated ADF over REST v3, swaps each marked image for a `mediaSingle`
+node, and writes it back.
+
+> **Do not "fix" captions into ADF `caption` nodes.** ADF has a `caption` node inside `mediaSingle`
+> and Jira happily stores it (the API returns 200 and a GET shows it), but Jira **never renders it in
+> comments** — it is a Confluence-only feature. That is why captions are emitted as a separate
+> italic (`em`) paragraph right after the image.
 
 ## Library usage
 

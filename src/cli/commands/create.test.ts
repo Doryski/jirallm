@@ -18,9 +18,17 @@ vi.mock('../resolveUser.js', () => ({
 }));
 
 const createIssueMock = vi.fn();
+const editIssueMock = vi.fn();
+const uploadAttachmentMock = vi.fn();
+const getIssueDescriptionAdfMock = vi.fn();
+const updateIssueDescriptionAdfMock = vi.fn();
 vi.mock('../../lib/jiraClient.js', () => ({
   JiraClient: class {
     createIssue = createIssueMock;
+    editIssue = editIssueMock;
+    uploadAttachment = uploadAttachmentMock;
+    getIssueDescriptionAdf = getIssueDescriptionAdfMock;
+    updateIssueDescriptionAdf = updateIssueDescriptionAdfMock;
   },
 }));
 
@@ -50,6 +58,13 @@ beforeEach(async () => {
   vi.spyOn(process.stdout, 'write').mockImplementation((c) => { writes.push(String(c)); return true; });
   createIssueMock.mockReset();
   createIssueMock.mockResolvedValue({ id: '100', key: 'PROJ-99', self: 'https://x' });
+  editIssueMock.mockReset();
+  uploadAttachmentMock.mockReset();
+  uploadAttachmentMock.mockImplementation(async (_key: string, file: string) => [
+    { id: `id-${file}`, filename: file.split('/').pop(), size: 1 },
+  ]);
+  getIssueDescriptionAdfMock.mockReset();
+  updateIssueDescriptionAdfMock.mockReset();
   loadOrgProfileMock.mockReset();
   loadOrgProfileMock.mockImplementation(async () => singleProjectProfile());
   resolveAccountIdMock.mockReset();
@@ -224,6 +239,44 @@ describe('runCreate', () => {
       /No project specified/
     );
     expect(createIssueMock).not.toHaveBeenCalled();
+  });
+
+  it('uploads --attach-images after creating the issue and rewrites the description ADF', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    getIssueDescriptionAdfMock.mockResolvedValue({
+      version: 1,
+      type: 'doc',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: '⟦jirallm-img-0⟧' }] },
+        {
+          type: 'mediaGroup',
+          content: [{ type: 'media', attrs: { type: 'file', id: 'uuid-1', collection: '' } }],
+        },
+      ],
+    });
+
+    await runCreate({
+      org: 'acme',
+      type: 'Bug',
+      summary: 's',
+      description: 'repro steps',
+      attachImages: ['/tmp/repro.png:"Stack trace"'],
+    });
+
+    expect(uploadAttachmentMock).toHaveBeenCalledWith('PROJ-99', '/tmp/repro.png');
+    expect(editIssueMock.mock.calls[0][1].descriptionMarkdown).toContain('⟦jirallm-img-0⟧');
+    const [issueKey, adf] = updateIssueDescriptionAdfMock.mock.calls[0];
+    expect(issueKey).toBe('PROJ-99');
+    expect(adf.content[0].type).toBe('mediaSingle');
+    expect(adf.content[1].content[0].marks).toEqual([{ type: 'em' }]);
+  });
+
+  it('leaves the create flow untouched when no files are attached', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runCreate({ org: 'acme', type: 'Task', summary: 's', description: 'plain' });
+    expect(uploadAttachmentMock).not.toHaveBeenCalled();
+    expect(editIssueMock).not.toHaveBeenCalled();
+    expect(updateIssueDescriptionAdfMock).not.toHaveBeenCalled();
   });
 
   it('parses --field before failing on a missing project', async () => {

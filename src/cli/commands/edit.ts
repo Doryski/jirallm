@@ -6,6 +6,11 @@ import { parseIssueKey } from '../issueKey.js';
 import { resolveOrg } from '../resolveOrg.js';
 import { resolveAccountId } from '../resolveUser.js';
 import { printJson, shouldOutputJson } from '../jsonOutput.js';
+import {
+  embedDescriptionImages,
+  prepareAttachments,
+  previewImages,
+} from '../attachEmbeds.js';
 
 export type EditOptions = {
   issueKey: string;
@@ -21,6 +26,10 @@ export type EditOptions = {
   due?: string;
   components?: string;
   field?: string[];
+  attach?: string[];
+  attachImages?: string[];
+  imageLayout?: string;
+  imageWidth?: string;
   dryRun?: boolean;
   json?: boolean;
 };
@@ -37,6 +46,23 @@ export async function runEdit(opts: EditOptions): Promise<void> {
     descriptionMarkdown = await readFile(opts.descriptionFile, 'utf8');
   } else if (opts.description !== undefined) {
     descriptionMarkdown = opts.description;
+  }
+
+  const applied = await prepareAttachments(
+    client,
+    parsed.key,
+    descriptionMarkdown ?? '',
+    opts,
+    !!opts.dryRun
+  );
+  if (applied.attachedNames.length > 0) {
+    if (descriptionMarkdown === undefined) {
+      console.warn(
+        'Warning: files uploaded, but no --description/--description-file given — embeds were not added to the description.'
+      );
+    } else {
+      descriptionMarkdown = applied.body;
+    }
   }
 
   let assigneeAccountId: string | null | undefined;
@@ -72,7 +98,13 @@ export async function runEdit(opts: EditOptions): Promise<void> {
     const dryRunFields =
       assigneeDisplayName !== undefined ? { ...fields, assigneeDisplayName } : fields;
     if (shouldOutputJson(opts)) {
-      printJson({ dryRun: true, issueKey: parsed.key, fields: dryRunFields });
+      printJson({
+        dryRun: true,
+        issueKey: parsed.key,
+        fields: dryRunFields,
+        attachments: applied.attachedNames,
+        embeddedImages: previewImages(applied.images, applied.layout),
+      });
     } else {
       console.log(`Dry run — would edit ${parsed.key}:`);
       console.log(JSON.stringify(dryRunFields, null, 2));
@@ -81,9 +113,16 @@ export async function runEdit(opts: EditOptions): Promise<void> {
   }
 
   await client.editIssue(parsed.key, fields);
+  if (applied.images.length > 0 && descriptionMarkdown !== undefined) {
+    await embedDescriptionImages(client, parsed.key, applied.images, applied.layout);
+  }
 
   if (shouldOutputJson(opts)) {
-    printJson({ issueKey: parsed.key, updated: true });
+    printJson({
+      issueKey: parsed.key,
+      updated: true,
+      ...(applied.attachedNames.length > 0 ? { attachments: applied.attachedNames } : {}),
+    });
     return;
   }
   console.log(`✓ Updated ${parsed.key}`);

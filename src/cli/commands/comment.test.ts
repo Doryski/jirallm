@@ -14,8 +14,10 @@ const deleteCommentMock = vi.fn();
 const getCommentMock = vi.fn();
 const fetchIssueCommentsMock = vi.fn();
 const uploadAttachmentMock = vi.fn();
+const updateCommentAdfMock = vi.fn();
 vi.mock('../../lib/jiraClient.js', () => ({
   JiraClient: class {
+    updateCommentAdf = updateCommentAdfMock;
     addComment = addCommentMock;
     updateComment = updateCommentMock;
     deleteComment = deleteCommentMock;
@@ -53,6 +55,7 @@ beforeEach(() => {
   getCommentMock.mockReset();
   fetchIssueCommentsMock.mockReset();
   uploadAttachmentMock.mockReset();
+  updateCommentAdfMock.mockReset();
   confirmOrAbortMock.mockReset();
   addCommentMock.mockResolvedValue({ id: 'new-1' });
   confirmOrAbortMock.mockResolvedValue(true);
@@ -191,6 +194,102 @@ describe('runComment', () => {
       '!shot.png|thumbnail!'
     );
   });
+
+  it('--attach-images rewrites the posted comment into mediaSingle + em caption', async () => {
+    uploadAttachmentMock.mockImplementation(async (_key: string, file: string) => [
+      { id: `id-${file}`, filename: file.split('/').pop(), size: 1 },
+    ]);
+    getCommentMock.mockImplementation(async () => ({
+      id: 'new-1',
+      author: { displayName: 'Alice' },
+      created: '2026-01-01',
+      body: {
+        version: 1,
+        type: 'doc',
+        content: [
+          { type: 'paragraph', content: [{ type: 'text', text: 'summary body' }] },
+          { type: 'paragraph', content: [{ type: 'text', text: '⟦jirallm-img-0⟧' }] },
+          {
+            type: 'mediaGroup',
+            content: [{ type: 'media', attrs: { type: 'file', id: 'uuid-1', collection: '' } }],
+          },
+        ],
+      },
+    }));
+
+    await runComment('PROJ-1', {
+      text: 'summary body',
+      noWiki: true,
+      attachImages: ['/tmp/shot.png:"Nowe pole"'],
+      imageLayout: 'align-start',
+      imageWidth: '50',
+    });
+
+    const posted = addCommentMock.mock.calls[0][1] as string;
+    expect(posted).toContain('⟦jirallm-img-0⟧');
+    expect(posted).toContain('[^shot.png]');
+
+    const [issueKey, commentId, adf] = updateCommentAdfMock.mock.calls[0];
+    expect(issueKey).toBe('PROJ-1');
+    expect(commentId).toBe('new-1');
+    expect(adf.content[1]).toEqual({
+      type: 'mediaSingle',
+      attrs: { layout: 'align-start', width: 50 },
+      content: [{ type: 'media', attrs: { type: 'file', id: 'uuid-1', collection: '' } }],
+    });
+    expect(adf.content[2]).toEqual({
+      type: 'paragraph',
+      content: [{ type: 'text', text: 'Nowe pole', marks: [{ type: 'em' }] }],
+    });
+    expect(JSON.stringify(adf)).not.toContain('"caption"');
+  });
+
+  it('--attach-images in dry-run touches no network and previews the embeds', async () => {
+    await runComment('PROJ-1', {
+      text: 'body',
+      noWiki: true,
+      dryRun: true,
+      json: true,
+      attachImages: ['/tmp/shot.png:"Podpis"'],
+      imageLayout: 'center',
+      imageWidth: '80',
+    });
+
+    expect(uploadAttachmentMock).not.toHaveBeenCalled();
+    expect(addCommentMock).not.toHaveBeenCalled();
+    expect(updateCommentAdfMock).not.toHaveBeenCalled();
+    const parsed = JSON.parse(writes.join(''));
+    expect(parsed.embeddedImages).toEqual([
+      { filename: 'shot.png', caption: 'Podpis', layout: 'center', width: 80 },
+    ]);
+  });
+
+  it('rejects an invalid --image-layout or --image-width before calling Jira', async () => {
+    await expect(
+      runComment('PROJ-1', { text: 'x', attachImages: ['/tmp/a.png'], imageLayout: 'sideways' })
+    ).rejects.toThrow(/Invalid --image-layout/);
+    await expect(
+      runComment('PROJ-1', { text: 'x', attachImages: ['/tmp/a.png'], imageWidth: '900' })
+    ).rejects.toThrow(/between 1 and 100/);
+    expect(uploadAttachmentMock).not.toHaveBeenCalled();
+    expect(addCommentMock).not.toHaveBeenCalled();
+  });
+
+  it('embeds a non-image passed to --attach-images as a plain attachment card', async () => {
+    uploadAttachmentMock.mockImplementation(async (_key: string, file: string) => [
+      { id: `id-${file}`, filename: file.split('/').pop(), size: 1 },
+    ]);
+    await runComment('PROJ-1', {
+      text: 'body',
+      noWiki: true,
+      attachImages: ['/tmp/report.txt'],
+    });
+
+    const posted = addCommentMock.mock.calls[0][1] as string;
+    expect(posted).toContain('[^report.txt]');
+    expect(posted).not.toContain('jirallm-img');
+    expect(updateCommentAdfMock).not.toHaveBeenCalled();
+  });
 });
 
 describe('runEditComment', () => {
@@ -261,6 +360,43 @@ describe('runEditComment', () => {
     const parsed = JSON.parse(writes.join(''));
     expect(parsed.attachments).toEqual(['after-proof.png']);
     expect(parsed.body).toContain('!after-proof.png|thumbnail!');
+  });
+
+  it('--attach-images rewrites the edited comment into mediaSingle', async () => {
+    uploadAttachmentMock.mockImplementation(async (_key: string, file: string) => [
+      { id: `id-${file}`, filename: file.split('/').pop(), size: 1 },
+    ]);
+    getCommentMock.mockResolvedValue({
+      id: '55',
+      author: { displayName: 'Alice' },
+      created: '2026-01-01',
+      body: {
+        version: 1,
+        type: 'doc',
+        content: [
+          { type: 'paragraph', content: [{ type: 'text', text: '⟦jirallm-img-0⟧' }] },
+          {
+            type: 'mediaGroup',
+            content: [{ type: 'media', attrs: { type: 'file', id: 'uuid-9', collection: '' } }],
+          },
+        ],
+      },
+    });
+
+    await runEditComment('PROJ-1', '55', {
+      text: 'updated body',
+      noWiki: true,
+      attachImages: ['/tmp/after.png:"Po poprawce"'],
+    });
+
+    const [, commentId, adf] = updateCommentAdfMock.mock.calls[0];
+    expect(commentId).toBe('55');
+    expect(adf.content[0].type).toBe('mediaSingle');
+    expect(adf.content[1].content[0]).toEqual({
+      type: 'text',
+      text: 'Po poprawce',
+      marks: [{ type: 'em' }],
+    });
   });
 });
 

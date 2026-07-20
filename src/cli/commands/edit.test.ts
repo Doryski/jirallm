@@ -22,8 +22,14 @@ const editIssueMock = vi.fn();
 const getCurrentUserMock = vi.fn();
 const searchAssignableUsersMock = vi.fn();
 const searchUsersMock = vi.fn();
+const uploadAttachmentMock = vi.fn();
+const getIssueDescriptionAdfMock = vi.fn();
+const updateIssueDescriptionAdfMock = vi.fn();
 vi.mock('../../lib/jiraClient.js', () => ({
   JiraClient: class {
+    uploadAttachment = uploadAttachmentMock;
+    getIssueDescriptionAdf = getIssueDescriptionAdfMock;
+    updateIssueDescriptionAdf = updateIssueDescriptionAdfMock;
     editIssue = editIssueMock;
     getCurrentUser = getCurrentUserMock;
     searchAssignableUsers = searchAssignableUsersMock;
@@ -45,6 +51,12 @@ beforeEach(async () => {
   vi.spyOn(process.stdout, 'write').mockImplementation((c) => { writes.push(String(c)); return true; });
   editIssueMock.mockReset();
   editIssueMock.mockResolvedValue(undefined);
+  uploadAttachmentMock.mockReset();
+  uploadAttachmentMock.mockImplementation(async (_key: string, file: string) => [
+    { id: `id-${file}`, filename: file.split('/').pop(), size: 1 },
+  ]);
+  getIssueDescriptionAdfMock.mockReset();
+  updateIssueDescriptionAdfMock.mockReset();
   getCurrentUserMock.mockReset();
   searchAssignableUsersMock.mockReset();
   searchAssignableUsersMock.mockResolvedValue([]);
@@ -203,5 +215,53 @@ describe('runEdit', () => {
     expect(editIssueMock.mock.calls[0][1].customFields).toEqual({
       customfield_10051: { value: 'Always' },
     });
+  });
+
+  it('--attach-images appends embeds to the new description and rewrites its ADF', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    getIssueDescriptionAdfMock.mockResolvedValue({
+      version: 1,
+      type: 'doc',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: '⟦jirallm-img-0⟧' }] },
+        {
+          type: 'mediaGroup',
+          content: [{ type: 'media', attrs: { type: 'file', id: 'uuid-1', collection: '' } }],
+        },
+      ],
+    });
+
+    await runEdit({
+      issueKey: 'PROJ-1',
+      description: 'updated',
+      attachImages: ['/tmp/after.png:"After the fix"'],
+      imageLayout: 'center',
+      imageWidth: '80',
+    });
+
+    expect(uploadAttachmentMock).toHaveBeenCalledWith('PROJ-1', '/tmp/after.png');
+    expect(editIssueMock.mock.calls[0][1].descriptionMarkdown).toContain('⟦jirallm-img-0⟧');
+    const [, adf] = updateIssueDescriptionAdfMock.mock.calls[0];
+    expect(adf.content[0].attrs).toEqual({ layout: 'center', width: 80 });
+    expect(adf.content[1].content[0].text).toBe('After the fix');
+  });
+
+  it('uploads but leaves the description alone when no description flag is given', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await runEdit({ issueKey: 'PROJ-1', summary: 'x', attach: ['/tmp/report.txt'] });
+
+    expect(uploadAttachmentMock).toHaveBeenCalledTimes(1);
+    expect(editIssueMock.mock.calls[0][1].descriptionMarkdown).toBeUndefined();
+    expect(updateIssueDescriptionAdfMock).not.toHaveBeenCalled();
+    expect(warn.mock.calls.flat().join(' ')).toMatch(/no --description/);
+    warn.mockRestore();
+  });
+
+  it('does not touch attachments when no files are passed', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runEdit({ issueKey: 'PROJ-1', description: 'plain' });
+    expect(uploadAttachmentMock).not.toHaveBeenCalled();
+    expect(updateIssueDescriptionAdfMock).not.toHaveBeenCalled();
   });
 });

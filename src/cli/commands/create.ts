@@ -4,6 +4,12 @@ import { JiraClient } from '../../lib/jiraClient.js';
 import { parseFieldFlags } from '../../lib/customFieldWrite.js';
 import { resolveAccountId } from '../resolveUser.js';
 import { printJson, shouldOutputJson } from '../jsonOutput.js';
+import {
+  embedDescriptionImages,
+  prepareAttachments,
+  previewImages,
+  resolveMediaLayout,
+} from '../attachEmbeds.js';
 
 export type CreateOptions = {
   org?: string;
@@ -18,12 +24,17 @@ export type CreateOptions = {
   parent?: string;
   components?: string;
   field?: string[];
+  attach?: string[];
+  attachImages?: string[];
+  imageLayout?: string;
+  imageWidth?: string;
   dryRun?: boolean;
   json?: boolean;
 };
 
 export async function runCreate(opts: CreateOptions): Promise<void> {
   const profile = await loadOrgProfile({ org: opts.org });
+  resolveMediaLayout(opts);
 
   let descriptionMarkdown: string | undefined;
   if (opts.descriptionFile) {
@@ -68,20 +79,48 @@ export async function runCreate(opts: CreateOptions): Promise<void> {
   };
 
   if (opts.dryRun) {
+    const dryRunAttachments = await prepareAttachments(
+      client,
+      '(new issue)',
+      descriptionMarkdown ?? '',
+      opts,
+      true
+    );
     const preview = assigneeDisplayName ? { ...input, assigneeDisplayName } : input;
     if (shouldOutputJson(opts)) {
-      printJson({ dryRun: true, input: preview });
+      printJson({
+        dryRun: true,
+        input: preview,
+        attachments: dryRunAttachments.attachedNames,
+        embeddedImages: previewImages(dryRunAttachments.images, dryRunAttachments.layout),
+      });
     } else {
       console.log('Dry run — would create issue:');
       console.log(JSON.stringify(preview, null, 2));
+      for (const name of dryRunAttachments.attachedNames) console.log(`  attach: ${name}`);
     }
     return;
   }
 
   const result = await client.createIssue(input);
 
+  const applied = await prepareAttachments(
+    client,
+    result.key,
+    descriptionMarkdown ?? '',
+    opts,
+    false
+  );
+  if (applied.attachedNames.length > 0) {
+    await client.editIssue(result.key, { descriptionMarkdown: applied.body });
+    await embedDescriptionImages(client, result.key, applied.images, applied.layout);
+  }
+
   if (shouldOutputJson(opts)) {
-    printJson(result);
+    printJson({
+      ...result,
+      ...(applied.attachedNames.length > 0 ? { attachments: applied.attachedNames } : {}),
+    });
     return;
   }
   console.log(`✓ Created ${result.key}`);
