@@ -22,6 +22,7 @@ const editIssueMock = vi.fn();
 const uploadAttachmentMock = vi.fn();
 const getIssueDescriptionAdfMock = vi.fn();
 const updateIssueDescriptionAdfMock = vi.fn();
+const getCreateFieldsMock = vi.fn();
 vi.mock('../../lib/jiraClient.js', () => ({
   JiraClient: class {
     createIssue = createIssueMock;
@@ -29,6 +30,7 @@ vi.mock('../../lib/jiraClient.js', () => ({
     uploadAttachment = uploadAttachmentMock;
     getIssueDescriptionAdf = getIssueDescriptionAdfMock;
     updateIssueDescriptionAdf = updateIssueDescriptionAdfMock;
+    getCreateFields = getCreateFieldsMock;
   },
 }));
 
@@ -65,6 +67,10 @@ beforeEach(async () => {
   ]);
   getIssueDescriptionAdfMock.mockReset();
   updateIssueDescriptionAdfMock.mockReset();
+  getCreateFieldsMock.mockReset();
+  getCreateFieldsMock.mockResolvedValue([
+    { fieldId: 'customfield_10050', name: 'Severity', required: false },
+  ]);
   loadOrgProfileMock.mockReset();
   loadOrgProfileMock.mockImplementation(async () => singleProjectProfile());
   resolveAccountIdMock.mockReset();
@@ -283,6 +289,68 @@ describe('runCreate', () => {
     expect(uploadAttachmentMock).not.toHaveBeenCalled();
     expect(editIssueMock).not.toHaveBeenCalled();
     expect(updateIssueDescriptionAdfMock).not.toHaveBeenCalled();
+  });
+
+  it('aborts before createIssue when a --field is not on the create screen', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    getCreateFieldsMock.mockResolvedValue([
+      { fieldId: 'customfield_99999', name: 'Something Else', required: false },
+    ]);
+    await expect(
+      runCreate({ org: 'acme', type: 'Bug', summary: 's', field: ['severity=High'] })
+    ).rejects.toThrow(/not on the .*create screen/i);
+    expect(getCreateFieldsMock).toHaveBeenCalledWith('PROJ', 'Bug');
+    expect(createIssueMock).not.toHaveBeenCalled();
+  });
+
+  it('names the offending friendly field and points at edit in the error', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    getCreateFieldsMock.mockResolvedValue([]);
+    await expect(
+      runCreate({ org: 'acme', type: 'Bug', summary: 's', field: ['severity=High'] })
+    ).rejects.toThrow(/severity[\s\S]*jirallm edit/i);
+    expect(createIssueMock).not.toHaveBeenCalled();
+  });
+
+  it('creates normally when every --field is on the create screen', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runCreate({ org: 'acme', type: 'Bug', summary: 's', field: ['severity=High'] });
+    expect(getCreateFieldsMock).toHaveBeenCalledWith('PROJ', 'Bug');
+    expect(createIssueMock.mock.calls[0][0].customFields).toEqual({
+      customfield_10050: { value: 'High' },
+    });
+  });
+
+  it('skips create-screen validation entirely when no --field is passed', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runCreate({ org: 'acme', type: 'Task', summary: 's' });
+    expect(getCreateFieldsMock).not.toHaveBeenCalled();
+    expect(createIssueMock).toHaveBeenCalled();
+  });
+
+  it('does not validate the create screen on --dry-run (stays offline)', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runCreate({
+      org: 'acme',
+      type: 'Bug',
+      summary: 's',
+      field: ['severity=High'],
+      dryRun: true,
+      json: true,
+    });
+    expect(getCreateFieldsMock).not.toHaveBeenCalled();
+    expect(createIssueMock).not.toHaveBeenCalled();
+  });
+
+  it('warns and proceeds when the create screen cannot be fetched', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    getCreateFieldsMock.mockRejectedValue(new Error('403 Forbidden'));
+    await runCreate({ org: 'acme', type: 'Bug', summary: 's', field: ['severity=High'] });
+    expect(createIssueMock.mock.calls[0][0].customFields).toEqual({
+      customfield_10050: { value: 'High' },
+    });
+    expect(warn).toHaveBeenCalled();
   });
 
   it('parses --field before failing on a missing project', async () => {

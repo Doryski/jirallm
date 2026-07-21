@@ -1,7 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import { loadOrgProfile, resolveOptionalProjectKey } from '../../lib/config.js';
 import { JiraClient } from '../../lib/jiraClient.js';
-import { parseFieldFlags } from '../../lib/customFieldWrite.js';
+import { findFieldsOffCreateScreen, parseFieldFlags } from '../../lib/customFieldWrite.js';
+import type { CustomFieldDefs } from '../../lib/exportFields.js';
 import { resolveAccountId } from '../resolveUser.js';
 import { printJson, shouldOutputJson } from '../jsonOutput.js';
 import {
@@ -102,6 +103,16 @@ export async function runCreate(opts: CreateOptions): Promise<void> {
     return;
   }
 
+  if (customFields) {
+    await assertCustomFieldsOnCreateScreen(
+      client,
+      projectKey,
+      opts.type,
+      customFields,
+      profile.org?.export?.customFieldDefs
+    );
+  }
+
   const result = await client.createIssue(input);
 
   const applied = await prepareAttachments(
@@ -124,4 +135,45 @@ export async function runCreate(opts: CreateOptions): Promise<void> {
     return;
   }
   console.log(`✓ Created ${result.key}`);
+}
+
+/**
+ * Guard against Jira silently dropping custom fields on create: fields absent
+ * from the project + issue-type create screen are ignored (and defaulted) by the
+ * create endpoint, unlike edit. Abort with a clear message instead of writing an
+ * issue with the values silently lost. If the create screen can't be fetched
+ * (e.g. permissions), warn and proceed rather than block a flow that may work.
+ */
+async function assertCustomFieldsOnCreateScreen(
+  client: JiraClient,
+  projectKey: string,
+  issueType: string,
+  customFields: Record<string, unknown>,
+  customFieldDefs: CustomFieldDefs = {}
+): Promise<void> {
+  let createFields;
+  try {
+    createFields = await client.getCreateFields(projectKey, issueType);
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    console.warn(
+      `Warning: could not verify the "${issueType}" create screen (${reason}) — ` +
+        'proceeding without checking that --field values are on it.'
+    );
+    return;
+  }
+
+  const missing = findFieldsOffCreateScreen(
+    Object.keys(customFields),
+    createFields.map((f) => f.fieldId)
+  );
+  if (missing.length === 0) return;
+
+  const idToName = new Map(Object.entries(customFieldDefs).map(([name, def]) => [def.id, name]));
+  const labels = missing.map((id) => (idToName.has(id) ? `${idToName.get(id)} [${id}]` : id));
+  throw new Error(
+    `Field(s) not on the "${issueType}" create screen in ${projectKey}: ${labels.join(', ')}. ` +
+      'Jira would silently drop them on create. Add them to the create screen, or create the ' +
+      `issue first and set them with \`jirallm edit <key> --field ...\`. Run \`jirallm fields -P ${projectKey} --type ${issueType}\` to list create-screen fields.`
+  );
 }

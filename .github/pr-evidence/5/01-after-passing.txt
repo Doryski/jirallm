@@ -1,0 +1,9 @@
+
+ RUN  v4.1.5 /Users/doryski/Documents/git_projects/Priv_workspace/jirallm
+
+
+ Test Files  2 passed (2)
+      Tests  43 passed (43)
+   Start at  15:31:07
+   Duration  1.20s (transform 438ms, setup 0ms, import 802ms, tests 40ms, environment 0ms)
+

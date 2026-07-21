@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { formatCustomFieldWrite, parseFieldFlag, parseFieldFlags } from './customFieldWrite.js';
+import {
+  findFieldsOffCreateScreen,
+  formatCustomFieldWrite,
+  parseFieldFlag,
+  parseFieldFlags,
+} from './customFieldWrite.js';
 import type { CustomFieldDefs } from './exportFields.js';
 
 describe('formatCustomFieldWrite', () => {
@@ -101,5 +106,26 @@ describe('parseFieldFlags', () => {
       customfield_10050: { value: 'High' },
       customfield_10099: { value: 'PROD' },
     });
+  });
+});
+
+describe('findFieldsOffCreateScreen', () => {
+  it('returns ids absent from the create screen', () => {
+    expect(
+      findFieldsOffCreateScreen(
+        ['customfield_10050', 'customfield_10099'],
+        ['customfield_10050']
+      )
+    ).toEqual(['customfield_10099']);
+  });
+
+  it('returns an empty list when every id is on the screen', () => {
+    expect(
+      findFieldsOffCreateScreen(['customfield_10050'], ['customfield_10050', 'customfield_10099'])
+    ).toEqual([]);
+  });
+
+  it('treats an empty create screen as everything missing', () => {
+    expect(findFieldsOffCreateScreen(['customfield_10050'], [])).toEqual(['customfield_10050']);
   });
 });
