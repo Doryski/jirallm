@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../../lib/config.js', () => ({
   loadProfile: vi.fn(async () => ({
     config: { baseUrl: 'https://x', userEmail: 'u@x', projectKey: 'PROJ' },
+    org: { name: 'solo', export: undefined },
     project: { key: 'PROJ' },
     apiToken: 'tok',
   })),
@@ -18,14 +19,19 @@ const loadProfileMock = vi.mocked(loadProfile);
 
 const fetchIssueDetailsMock = vi.fn();
 const fetchIssueSubtasksMock = vi.fn();
+const fetchIssueRawMock = vi.fn();
 vi.mock('../../lib/jiraClient.js', () => ({
   JiraClient: class {
     fetchIssueDetails = fetchIssueDetailsMock;
     fetchIssueSubtasks = fetchIssueSubtasksMock;
+    fetchIssueRaw = fetchIssueRawMock;
   },
 }));
 
 import { runFetch } from './fetch.js';
+import { resolveFieldSet } from '../../lib/exportFields.js';
+
+const DEFAULT_FIELD_IDS = resolveFieldSet(undefined, {}).jiraFieldIds;
 
 const FAKE_DATA = {
   key: 'PROJ-1',
@@ -54,7 +60,14 @@ beforeEach(() => {
   fetchIssueDetailsMock.mockResolvedValue(FAKE_DATA);
   fetchIssueSubtasksMock.mockReset();
   fetchIssueSubtasksMock.mockResolvedValue([]);
+  fetchIssueRawMock.mockReset();
   loadProfileMock.mockClear();
+  loadProfileMock.mockResolvedValue({
+    config: { baseUrl: 'https://x', userEmail: 'u@x', projectKey: 'PROJ' },
+    org: { name: 'solo', baseUrl: 'https://x', userEmail: 'u@x', projects: {}, export: undefined },
+    project: { key: 'PROJ' },
+    apiToken: 'tok',
+  });
 });
 
 afterEach(() => {
@@ -111,6 +124,8 @@ describe('runFetch', () => {
     Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
     await runFetch({ issueKey: 'PROJ-1', org: 'acme' });
     expect(fetchIssueDetailsMock).toHaveBeenCalledWith('PROJ-1', {
+      jiraFieldIds: DEFAULT_FIELD_IDS,
+      customFieldDefs: {},
       includeComments: false,
       includeChangelog: false,
       fullChangelog: false,
@@ -124,6 +139,8 @@ describe('runFetch', () => {
     Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
     await runFetch({ issueKey: 'PROJ-1', org: 'acme', full: true });
     expect(fetchIssueDetailsMock).toHaveBeenCalledWith('PROJ-1', {
+      jiraFieldIds: DEFAULT_FIELD_IDS,
+      customFieldDefs: {},
       includeComments: true,
       includeChangelog: true,
       fullChangelog: true,
@@ -181,6 +198,51 @@ describe('runFetch', () => {
     expect(out).not.toContain('## Subtasks');
     expect(out).not.toContain('## Links');
     expect(out).not.toContain('## Attachments');
+  });
+
+  it('--fields all widens the requested Jira field set', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runFetch({ issueKey: 'PROJ-1', org: 'acme', json: true, fields: 'all' });
+    const expected = resolveFieldSet({ preset: 'all' }, {}).jiraFieldIds;
+    expect(fetchIssueDetailsMock).toHaveBeenCalledWith(
+      'PROJ-1',
+      expect.objectContaining({ jiraFieldIds: expected, customFieldDefs: {} })
+    );
+  });
+
+  it('passes org custom field defs into the fetch', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    const customFieldDefs = { team: { id: 'customfield_10050', type: 'select' as const } };
+    loadProfileMock.mockResolvedValueOnce({
+      config: { baseUrl: 'https://x', userEmail: 'u@x', projectKey: 'PROJ' },
+      org: {
+        name: 'solo',
+        baseUrl: 'https://x',
+        userEmail: 'u@x',
+        projects: {},
+        export: { customFieldDefs },
+      },
+      project: { key: 'PROJ' },
+      apiToken: 'tok',
+    });
+    await runFetch({ issueKey: 'PROJ-1', org: 'acme', json: true });
+    const call = fetchIssueDetailsMock.mock.calls[0][1];
+    expect(call.customFieldDefs).toEqual(customFieldDefs);
+    expect(call.jiraFieldIds).toContain('customfield_10050');
+  });
+
+  it('--raw dumps the untransformed Jira field object as JSON', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    const rawIssue = {
+      key: 'PROJ-1',
+      fields: { labels: ['x'], components: [{ name: 'API' }], customfield_10050: { value: 'A' } },
+      names: { customfield_10050: 'Team' },
+    };
+    fetchIssueRawMock.mockResolvedValue(rawIssue);
+    await runFetch({ issueKey: 'PROJ-1', org: 'acme', raw: true });
+    expect(fetchIssueRawMock).toHaveBeenCalledWith('PROJ-1');
+    expect(fetchIssueDetailsMock).not.toHaveBeenCalled();
+    expect(JSON.parse(writes.join(''))).toEqual(rawIssue);
   });
 
   it('still prints full data JSON in json mode with flags', async () => {

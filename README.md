@@ -215,6 +215,8 @@ jirallm issuetypes --org acme --project PROJ --json
 jirallm linktypes --org acme --json
 jirallm search 'assignee = currentUser() AND statusCategory != Done' --org acme --limit 25 --json
 jirallm fetch PROJ-123 --json
+jirallm fetch PROJ-123 --fields all --json      # widen the field set (components, labels, custom fields, ...)
+jirallm fetch PROJ-123 --raw | jq '.fields.labels'  # complete, untransformed Jira field object
 jirallm transition PROJ-123 --list --json
 ```
 
