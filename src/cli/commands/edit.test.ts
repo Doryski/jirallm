@@ -301,7 +301,7 @@ describe('runEdit', () => {
       version: 1,
       type: 'doc',
       content: [
-        { type: 'paragraph', content: [{ type: 'text', text: '⟦jirallm-img-0⟧' }] },
+        { type: 'paragraph', content: [{ type: 'text', text: '⟦jirallm-media-0⟧' }] },
         {
           type: 'mediaGroup',
           content: [{ type: 'media', attrs: { type: 'file', id: 'uuid-1', collection: '' } }],
@@ -318,7 +318,7 @@ describe('runEdit', () => {
     });
 
     expect(uploadAttachmentMock).toHaveBeenCalledWith('PROJ-1', '/tmp/after.png');
-    expect(editIssueMock.mock.calls[0][1].descriptionMarkdown).toContain('⟦jirallm-img-0⟧');
+    expect(editIssueMock.mock.calls[0][1].descriptionMarkdown).toContain('⟦jirallm-media-0⟧');
     const [, adf] = updateIssueDescriptionAdfMock.mock.calls[0];
     expect(adf.content[0].attrs).toEqual({ layout: 'center', width: 80 });
     expect(adf.content[1].content[0].text).toBe('After the fix');

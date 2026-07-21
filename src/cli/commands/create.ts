@@ -9,7 +9,7 @@ import { printJson, shouldOutputJson } from '../jsonOutput.js';
 import {
   embedDescriptionImages,
   prepareAttachments,
-  previewImages,
+  previewMedia,
   resolveMediaLayout,
 } from '../attachEmbeds.js';
 
@@ -31,6 +31,7 @@ export type CreateOptions = {
   board?: string;
   attach?: string[];
   attachImages?: string[];
+  attachMedia?: string[];
   imageLayout?: string;
   imageWidth?: string;
   dryRun?: boolean;
@@ -105,7 +106,7 @@ export async function runCreate(opts: CreateOptions): Promise<void> {
         dryRun: true,
         input: preview,
         attachments: dryRunAttachments.attachedNames,
-        embeddedImages: previewImages(dryRunAttachments.images, dryRunAttachments.layout),
+        embeddedImages: previewMedia(dryRunAttachments.media, dryRunAttachments.layout),
       });
     } else {
       console.log('Dry run — would create issue:');
@@ -136,7 +137,7 @@ export async function runCreate(opts: CreateOptions): Promise<void> {
   );
   if (applied.attachedNames.length > 0) {
     await client.editIssue(result.key, { descriptionMarkdown: applied.body, noWiki: opts.noWiki });
-    await embedDescriptionImages(client, result.key, applied.images, applied.layout);
+    await embedDescriptionImages(client, result.key, applied.media, applied.layout);
   }
 
   if (shouldOutputJson(opts)) {

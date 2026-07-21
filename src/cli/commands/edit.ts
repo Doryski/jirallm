@@ -10,7 +10,7 @@ import { printJson, shouldOutputJson } from '../jsonOutput.js';
 import {
   embedDescriptionImages,
   prepareAttachments,
-  previewImages,
+  previewMedia,
 } from '../attachEmbeds.js';
 
 export type EditOptions = {
@@ -32,6 +32,7 @@ export type EditOptions = {
   board?: string;
   attach?: string[];
   attachImages?: string[];
+  attachMedia?: string[];
   imageLayout?: string;
   imageWidth?: string;
   dryRun?: boolean;
@@ -114,7 +115,7 @@ export async function runEdit(opts: EditOptions): Promise<void> {
         issueKey: parsed.key,
         fields: dryRunFields,
         attachments: applied.attachedNames,
-        embeddedImages: previewImages(applied.images, applied.layout),
+        embeddedImages: previewMedia(applied.media, applied.layout),
       });
     } else {
       console.log(`Dry run — would edit ${parsed.key}:`);
@@ -124,8 +125,8 @@ export async function runEdit(opts: EditOptions): Promise<void> {
   }
 
   await client.editIssue(parsed.key, fields);
-  if (applied.images.length > 0 && descriptionMarkdown !== undefined) {
-    await embedDescriptionImages(client, parsed.key, applied.images, applied.layout);
+  if (applied.media.length > 0 && descriptionMarkdown !== undefined) {
+    await embedDescriptionImages(client, parsed.key, applied.media, applied.layout);
   }
 
   if (shouldOutputJson(opts)) {

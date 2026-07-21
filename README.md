@@ -247,17 +247,19 @@ jirallm attach:rm 99021 --org acme
 jirallm watchers PROJ-123 --add me
 ```
 
-### Full-size images in comments and descriptions
+### Sized media in comments and descriptions
 
 `--attach` embeds images as wiki thumbnails (`!file.png|thumbnail!`) — small, centered, and not
-resizable, because Jira's wiki markup has no way to set an image size. `--attach-images` uploads the
-same files but embeds them as ADF `mediaSingle` nodes instead, which do support layout and width:
+resizable, because Jira's wiki markup has no way to set an image size. `--attach-images` (alias:
+`--attach-media`) uploads the same files but embeds them as ADF nodes instead, which do support
+layout and width:
 
 ```bash
 jirallm comment PROJ-123 --file ./summary.md \
   --attach-images shot.png:"New config field" flow.png \
   --image-layout align-start --image-width 50
 
+jirallm comment PROJ-123 --file ./repro.md --attach-media demo.webm:"Repro" trace.har
 jirallm comment:edit PROJ-123 26215 --file ./qa.md --attach-images after.png:"After the fix"
 jirallm create -o acme -t Bug -s "Crash" --description-file ./repro.md --attach-images repro.png
 jirallm edit PROJ-123 --description-file ./updated.md --attach-images after.png:"After the fix"
@@ -267,16 +269,46 @@ jirallm edit PROJ-123 --description-file ./updated.md --attach-images after.png:
 - `--image-layout`: `center`, `align-start` (default), `align-end`, `wrap-left`, `wrap-right`,
   `wide`, `full-width`.
 - `--image-width`: percent of the container width, `1`–`100` (default `50`).
-- Pixel dimensions are read from the file header (PNG/JPEG/GIF/WEBP/BMP) and passed to Jira.
-- Non-image files given to `--attach-images` fall back to attachment cards, like `--attach`.
+- **Images** — pixel dimensions are read from the file header (PNG/JPEG/GIF/WEBP/BMP) and embedded as
+  a sized `mediaSingle`.
+- **Videos** (`.mp4`, `.mov`, `.webm`, `.mkv`, …) — dimensions come from `ffprobe` (falling back to
+  parsing `ffmpeg -i`), so they render as a sized inline player instead of an attachment card. Without
+  ffmpeg/ffprobe on `PATH` the video still embeds, just without pixel dimensions.
+- **Any other file** (`.txt`, `.log`, `.har`, …) — embedded as a compact ADF `mediaGroup` tile;
+  consecutive files without captions share one tile row.
 - `--attach` is unchanged, so existing scripts keep working.
 - On `jirallm edit`, files are uploaded but the description is only rewritten when
   `--description`/`--description-file` is also given.
 
+#### Positional embedding
+
+By default media is appended to the end of the body. Write `@@media:<file>@@` on a line of its own to
+place a file exactly where you want it:
+
+```markdown
+## Steps to reproduce
+
+@@media:before.png@@
+
+Click **Save** — the dialog freezes:
+
+@@media:demo.webm@@
+
+Console output:
+
+@@media:trace.har@@
+```
+
+- The name matches the file's basename or the exact path passed on the command line.
+- Placeholders only count when they occupy their whole line; one inside a sentence is left as text.
+- Each file is consumed once; files without a placeholder are still appended at the end.
+- Unmatched placeholders warn and stay as literal text.
+- Works identically with `--no-wiki`, since the placeholder is plain text either way.
+
 How it works: the comment/description is posted through REST v2 (wiki markup) exactly as before, so
 Jira does the markdown→ADF conversion — tables, code blocks and attachment cards come out right.
-`jirallm` then reads the generated ADF over REST v3, swaps each marked image for a `mediaSingle`
-node, and writes it back.
+`jirallm` then reads the generated ADF over REST v3, swaps each marked file for a sized `mediaSingle`
+(images/videos) or a compact `mediaGroup` tile (everything else), and writes it back.
 
 > **Do not "fix" captions into ADF `caption` nodes.** ADF has a `caption` node inside `mediaSingle`
 > and Jira happily stores it (the API returns 200 and a GET shows it), but Jira **never renders it in

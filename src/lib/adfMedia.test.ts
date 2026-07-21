@@ -1,27 +1,29 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyMediaSingle,
-  buildImageEmbedBlock,
+  buildMediaEmbedBlock,
   containsMarkers,
-  imageMarker,
+  mediaMarker,
   isImageFile,
+  mediaKind,
   parseImageLayout,
-  parseImageSpec,
+  parseMediaSpec,
   parseImageWidth,
+  placeMediaMarkers,
   rewriteAdfMedia,
   type AdfDocument,
   type AdfNode,
-  type EmbeddedImage,
+  type EmbeddedMedia,
 } from './adfMedia.js';
 
 const LAYOUT = { layout: 'align-start', width: 50 } as const;
 
-function image(overrides: Partial<EmbeddedImage> = {}): EmbeddedImage {
-  return { marker: imageMarker(0), filename: 'shot.png', ...overrides };
+function image(overrides: Partial<EmbeddedMedia> = {}): EmbeddedMedia {
+  return { marker: mediaMarker(0), filename: 'shot.png', source: 'shot.png', kind: 'image', ...overrides };
 }
 
 function markerParagraph(index = 0): AdfNode {
-  return { type: 'paragraph', content: [{ type: 'text', text: imageMarker(index) }] };
+  return { type: 'paragraph', content: [{ type: 'text', text: mediaMarker(index) }] };
 }
 
 function mediaGroup(id: string): AdfNode {
@@ -35,31 +37,31 @@ function doc(...content: AdfNode[]): AdfDocument {
   return { version: 1, type: 'doc', content };
 }
 
-describe('parseImageSpec', () => {
+describe('parseMediaSpec', () => {
   it('returns the bare path when no caption is given', () => {
-    expect(parseImageSpec('shot.png')).toEqual({ path: 'shot.png' });
+    expect(parseMediaSpec('shot.png')).toEqual({ path: 'shot.png' });
   });
 
   it('parses a quoted caption', () => {
-    expect(parseImageSpec('shot.png:"Nowe pole"')).toEqual({
+    expect(parseMediaSpec('shot.png:"Nowe pole"')).toEqual({
       path: 'shot.png',
       caption: 'Nowe pole',
     });
   });
 
   it('keeps colons and Polish characters inside the caption', () => {
-    expect(parseImageSpec('a/b/shot.png:"Krok 2: zażółć gęślą jaźń"')).toEqual({
+    expect(parseMediaSpec('a/b/shot.png:"Krok 2: zażółć gęślą jaźń"')).toEqual({
       path: 'a/b/shot.png',
       caption: 'Krok 2: zażółć gęślą jaźń',
     });
   });
 
   it('treats a colon without a quoted caption as part of the path', () => {
-    expect(parseImageSpec('C:/tmp/shot.png')).toEqual({ path: 'C:/tmp/shot.png' });
+    expect(parseMediaSpec('C:/tmp/shot.png')).toEqual({ path: 'C:/tmp/shot.png' });
   });
 
   it('ignores an empty caption', () => {
-    expect(parseImageSpec('shot.png:""')).toEqual({ path: 'shot.png' });
+    expect(parseMediaSpec('shot.png:""')).toEqual({ path: 'shot.png' });
   });
 });
 
@@ -87,11 +89,11 @@ describe('parseImageLayout / parseImageWidth', () => {
   });
 });
 
-describe('buildImageEmbedBlock', () => {
+describe('buildMediaEmbedBlock', () => {
   it('emits a marker paragraph before each attachment embed', () => {
-    const images = [image(), image({ marker: imageMarker(1), filename: 'b.png' })];
-    expect(buildImageEmbedBlock(images)).toBe(
-      `${imageMarker(0)}\n\n[^shot.png]\n\n${imageMarker(1)}\n\n[^b.png]`
+    const images = [image(), image({ marker: mediaMarker(1), filename: 'b.png' })];
+    expect(buildMediaEmbedBlock(images)).toBe(
+      `${mediaMarker(0)}\n\n[^shot.png]\n\n${mediaMarker(1)}\n\n[^b.png]`
     );
   });
 });
@@ -189,7 +191,7 @@ describe('rewriteAdfMedia', () => {
   });
 
   it('handles several images independently', () => {
-    const images = [image(), image({ marker: imageMarker(1), filename: 'b.png', caption: 'B' })];
+    const images = [image(), image({ marker: mediaMarker(1), filename: 'b.png', caption: 'B' })];
     const result = rewriteAdfMedia(
       doc(markerParagraph(0), mediaGroup('a'), markerParagraph(1), mediaGroup('b')),
       images,
@@ -248,6 +250,121 @@ describe('applyMediaSingle', () => {
   });
 });
 
+describe('video and non-media kinds', () => {
+  it('sizes a video inline as a mediaSingle', () => {
+    const video = image({
+      filename: 'demo.webm',
+      source: 'demo.webm',
+      kind: 'video',
+      size: { width: 1280, height: 720 },
+    });
+    const result = rewriteAdfMedia(doc(markerParagraph(), mediaGroup('uuid-v')), [video], LAYOUT);
+
+    expect(result.replaced).toBe(1);
+    expect(result.doc.content[0]).toEqual({
+      type: 'mediaSingle',
+      attrs: { layout: 'align-start', width: 50 },
+      content: [
+        {
+          type: 'media',
+          attrs: { type: 'file', id: 'uuid-v', collection: '', width: 1280, height: 720 },
+        },
+      ],
+    });
+  });
+
+  it('renders a non-media file as a compact mediaGroup tile, not a mediaSingle', () => {
+    const log = image({ filename: 'app.log', source: 'app.log', kind: 'file' });
+    const result = rewriteAdfMedia(doc(markerParagraph(), mediaGroup('uuid-f')), [log], LAYOUT);
+
+    expect(result.doc.content).toEqual([
+      {
+        type: 'mediaGroup',
+        content: [{ type: 'media', attrs: { type: 'file', id: 'uuid-f', collection: '' } }],
+      },
+    ]);
+  });
+
+  it('merges consecutive non-media tiles into one mediaGroup', () => {
+    const files = [
+      image({ filename: 'a.log', source: 'a.log', kind: 'file' }),
+      image({ marker: mediaMarker(1), filename: 'b.har', source: 'b.har', kind: 'file' }),
+    ];
+    const result = rewriteAdfMedia(
+      doc(markerParagraph(0), mediaGroup('a'), markerParagraph(1), mediaGroup('b')),
+      files,
+      LAYOUT
+    );
+
+    expect(result.replaced).toBe(2);
+    expect(result.doc.content).toHaveLength(1);
+    expect(result.doc.content[0].content?.map((n) => n.attrs?.id)).toEqual(['a', 'b']);
+  });
+
+  it('breaks the tile group when a captioned file sits between two others', () => {
+    const files = [
+      image({ filename: 'a.log', source: 'a.log', kind: 'file', caption: 'first' }),
+      image({ marker: mediaMarker(1), filename: 'b.har', source: 'b.har', kind: 'file' }),
+    ];
+    const result = rewriteAdfMedia(
+      doc(markerParagraph(0), mediaGroup('a'), markerParagraph(1), mediaGroup('b')),
+      files,
+      LAYOUT
+    );
+
+    expect(result.doc.content.map((n) => n.type)).toEqual(['mediaGroup', 'paragraph', 'mediaGroup']);
+  });
+
+  it('classifies media by extension', () => {
+    expect(mediaKind('a.PNG')).toBe('image');
+    expect(mediaKind('clip.webm')).toBe('video');
+    expect(mediaKind('trace.har')).toBe('file');
+  });
+});
+
+describe('placeMediaMarkers', () => {
+  const shot = image({ filename: 'shot.png', source: './shots/shot.png' });
+
+  it('replaces a standalone placeholder line with the embed block', () => {
+    const result = placeMediaMarkers('before\n\n@@media:shot.png@@\n\nafter', [shot]);
+
+    expect(result.body).toBe(`before\n\n${mediaMarker(0)}\n\n[^shot.png]\n\nafter`);
+    expect(result.placed).toEqual([shot]);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it('matches the placeholder against the path given on the command line', () => {
+    const result = placeMediaMarkers('@@media:./shots/shot.png@@', [shot]);
+    expect(result.placed).toEqual([shot]);
+  });
+
+  it('leaves media without a placeholder unplaced', () => {
+    const result = placeMediaMarkers('no placeholder here', [shot]);
+    expect(result.placed).toEqual([]);
+    expect(result.body).toBe('no placeholder here');
+  });
+
+  it('warns and keeps the text when nothing matches the placeholder', () => {
+    const result = placeMediaMarkers('@@media:missing.png@@', [shot]);
+
+    expect(result.body).toBe('@@media:missing.png@@');
+    expect(result.warnings[0]).toMatch(/No attached file matches placeholder "@@media:missing.png@@"/);
+  });
+
+  it('ignores a placeholder embedded inside a sentence', () => {
+    const result = placeMediaMarkers('see @@media:shot.png@@ above', [shot]);
+    expect(result.placed).toEqual([]);
+    expect(result.body).toBe('see @@media:shot.png@@ above');
+  });
+
+  it('consumes each file once so repeated placeholders do not duplicate it', () => {
+    const result = placeMediaMarkers('@@media:shot.png@@\n\n@@media:shot.png@@', [shot]);
+
+    expect(result.placed).toHaveLength(1);
+    expect(result.warnings).toHaveLength(1);
+  });
+});
+
 describe('helpers', () => {
   it('detects image extensions case-insensitively', () => {
     expect(isImageFile('a.PNG')).toBe(true);
@@ -255,7 +372,7 @@ describe('helpers', () => {
   });
 
   it('finds markers in a rendered body', () => {
-    expect(containsMarkers(`x ${imageMarker(0)} y`, [image()])).toBe(true);
+    expect(containsMarkers(`x ${mediaMarker(0)} y`, [image()])).toBe(true);
     expect(containsMarkers('x y', [image()])).toBe(false);
   });
 });
