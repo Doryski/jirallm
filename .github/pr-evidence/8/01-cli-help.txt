@@ -1,0 +1,21 @@
+=== create --help (sprint/field) ===
+                             name= or name=null to clear.
+  --sprint <id>              Sprint field: a sprint id, "active" (board's active
+                             sprint), or "none" to clear
+  --board <name>             Board name to disambiguate --sprint active (when
+                             the project has several scrum boards)
+  $ jirallm create -o acme -t Story -s "Spike X" --sprint 42          # add to a sprint by id
+  $ jirallm create -o acme -t Story -s "Spike X" --sprint active      # add to the board's active sprint
+
+=== edit --help (sprint/field) ===
+  --unassign                 Unassign the issue (clears assignee)
+                             name= or name=null to clear.
+  --sprint <id>              Sprint field: a sprint id, "active" (board's active
+                             sprint), or "none" to clear
+  --board <name>             Board name to disambiguate --sprint active (when
+                             the project has several scrum boards)
+Clear any nullable field with an empty or null value: --field reproductionRate= or --field reproductionRate=null.
+  $ jirallm edit PROJ-123 --sprint 42            # move into sprint 42
+  $ jirallm edit PROJ-123 --sprint active        # move into the board's active sprint
+  $ jirallm edit PROJ-123 --sprint none          # remove from its sprint
+  $ jirallm edit PROJ-123 --field customfield_10020=   # clear any field (e.g. sprint) directly
