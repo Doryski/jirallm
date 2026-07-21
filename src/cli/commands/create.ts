@@ -22,7 +22,7 @@ export type CreateOptions = {
   labels?: string;
   priority?: string;
   parent?: string;
-  components?: string;
+  components?: string[];
   field?: string[];
   attach?: string[];
   attachImages?: string[];
@@ -44,7 +44,7 @@ export async function runCreate(opts: CreateOptions): Promise<void> {
   }
 
   const labels = opts.labels?.split(',').map((s) => s.trim()).filter(Boolean);
-  const components = opts.components?.split(',').map((s) => s.trim()).filter(Boolean);
+  const components = opts.components?.map((s) => s.trim()).filter(Boolean);
   const customFields = parseFieldFlags(opts.field, profile.org?.export?.customFieldDefs);
 
   const projectKey = resolveOptionalProjectKey(profile.org, opts.projectKey);

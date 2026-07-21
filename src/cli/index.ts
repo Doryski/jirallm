@@ -1064,7 +1064,7 @@ addImageOptions(
   .option('-l, --labels <list>', 'Comma-separated labels')
   .option('--priority <name>', 'Priority name (e.g. High)')
   .option('--parent <key>', 'Parent issue key (for subtasks / epic children)')
-  .option('--components <names>', 'Comma-separated component names')
+  .option('--components <name>', 'Component name (repeatable; pass once per component)', collect)
   .option(
     '-F, --field <pair>',
     'Set a custom field: friendlyName=value or customfield_NNNNN[:type]=value (repeatable)',
@@ -1073,7 +1073,7 @@ addImageOptions(
   .option('--dry-run', 'Show what would be created without calling Jira')
   .option('--json', 'Output JSON instead of human-readable')
 )
-  .action(async (opts: { org?: string; project?: string; type: string; summary: string; description?: string; descriptionFile?: string; assignee?: string; labels?: string; priority?: string; parent?: string; components?: string; field?: string[]; attach?: string[]; attachImages?: string[]; imageLayout?: string; imageWidth?: string; dryRun?: boolean; json?: boolean }) => {
+  .action(async (opts: { org?: string; project?: string; type: string; summary: string; description?: string; descriptionFile?: string; assignee?: string; labels?: string; priority?: string; parent?: string; components?: string[]; field?: string[]; attach?: string[]; attachImages?: string[]; imageLayout?: string; imageWidth?: string; dryRun?: boolean; json?: boolean }) => {
     try {
       await runCreate({
         org: opts.org,
@@ -1116,7 +1116,8 @@ Examples:
   $ jirallm create -o acme -P PROJ -t Bug -s "Crash on save" --description-file ./repro.md
   $ jirallm create -o acme -t Story -s "Spike X" -l backend,p1 --priority High
   $ jirallm create -o acme -t Sub-task -s "Subtask of PROJ-1" --parent PROJ-1
-  $ jirallm create -o acme -t Bug -s "Crash" --components Web,API --field severity=High --field environment=PROD
+  $ jirallm create -o acme -t Bug -s "Crash" --components Web --components API --field severity=High --field environment=PROD
+  $ jirallm create -o acme -t Bug -s "Crash" --components "Frontend, Web & API"   # a single name containing a comma
   $ jirallm create -o acme -t Bug -s "test" --dry-run --json
   $ jirallm create -o acme -t Bug -s "Crash" --description-file ./repro.md --attach-images repro.png:"Stack trace"
 `
@@ -1140,7 +1141,7 @@ addImageOptions(
   .option('--priority <name>', 'Priority name')
   .option('--parent <key>', 'Parent issue key (reparent / set epic)')
   .option('--due <date>', 'Due date (YYYY-MM-DD)')
-  .option('--components <names>', 'Comma-separated component names (replaces existing)')
+  .option('--components <name>', 'Component name (repeatable; replaces existing set)', collect)
   .option(
     '-F, --field <pair>',
     'Set a custom field: friendlyName=value or customfield_NNNNN[:type]=value (repeatable)',
@@ -1149,7 +1150,7 @@ addImageOptions(
   .option('--dry-run', 'Show what would change without calling Jira')
   .option('--json', 'Output JSON instead of human-readable')
 )
-  .action(async (issueKey: string, opts: { org?: string; summary?: string; description?: string; descriptionFile?: string; assignee?: string; unassign?: boolean; labels?: string; priority?: string; parent?: string; due?: string; components?: string; field?: string[]; attach?: string[]; attachImages?: string[]; imageLayout?: string; imageWidth?: string; dryRun?: boolean; json?: boolean }) => {
+  .action(async (issueKey: string, opts: { org?: string; summary?: string; description?: string; descriptionFile?: string; assignee?: string; unassign?: boolean; labels?: string; priority?: string; parent?: string; due?: string; components?: string[]; field?: string[]; attach?: string[]; attachImages?: string[]; imageLayout?: string; imageWidth?: string; dryRun?: boolean; json?: boolean }) => {
     try { await runEdit({ issueKey, ...opts }); } catch (err) { exitOnError(err); }
   })
   .addHelpText(
@@ -1164,7 +1165,7 @@ Examples:
   $ jirallm edit PROJ-123 --description-file ./updated.md
   $ jirallm edit PROJ-123 --labels backend,p1 --priority High
   $ jirallm edit PROJ-123 --parent PROJ-1 --due 2026-08-01
-  $ jirallm edit PROJ-123 --components Web,API --field reproductionRate=Always
+  $ jirallm edit PROJ-123 --components Web --components API --field reproductionRate=Always
   $ jirallm edit PROJ-123 --assignee 5ac1234567890abcdef
   $ jirallm edit PROJ-123 --unassign --dry-run --json
   $ jirallm edit PROJ-123 --description-file ./updated.md --attach-images after.png:"After the fix"
