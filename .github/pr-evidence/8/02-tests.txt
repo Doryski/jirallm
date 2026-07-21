@@ -1,0 +1,13 @@
+Targeted tests for the change (all passing):
+
+$ npx vitest run --maxWorkers=1 --bail=5 \
+    src/lib/customFieldWrite.test.ts src/lib/sprintWrite.test.ts \
+    src/cli/commands/create.test.ts src/cli/commands/edit.test.ts
+
+ Test Files  4 passed (4)
+      Tests  97 passed (97)
+
+Full suite + CI mirror (build, lint, type-check, test) all green:
+
+ Test Files  49 passed (49)
+      Tests  926 passed (926)

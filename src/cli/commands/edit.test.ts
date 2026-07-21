@@ -25,6 +25,10 @@ const searchUsersMock = vi.fn();
 const uploadAttachmentMock = vi.fn();
 const getIssueDescriptionAdfMock = vi.fn();
 const updateIssueDescriptionAdfMock = vi.fn();
+const detectSprintFieldIdMock = vi.fn();
+const listBoardsMock = vi.fn();
+const listSprintsMock = vi.fn();
+const findBoardByNameMock = vi.fn();
 vi.mock('../../lib/jiraClient.js', () => ({
   JiraClient: class {
     uploadAttachment = uploadAttachmentMock;
@@ -34,6 +38,10 @@ vi.mock('../../lib/jiraClient.js', () => ({
     getCurrentUser = getCurrentUserMock;
     searchAssignableUsers = searchAssignableUsersMock;
     searchUsers = searchUsersMock;
+    detectSprintFieldId = detectSprintFieldIdMock;
+    listBoards = listBoardsMock;
+    listSprints = listSprintsMock;
+    findBoardByName = findBoardByNameMock;
   },
 }));
 
@@ -62,6 +70,24 @@ beforeEach(async () => {
   searchAssignableUsersMock.mockResolvedValue([]);
   searchUsersMock.mockReset();
   searchUsersMock.mockResolvedValue([]);
+  detectSprintFieldIdMock.mockReset();
+  detectSprintFieldIdMock.mockResolvedValue('customfield_10020');
+  listBoardsMock.mockReset();
+  listBoardsMock.mockResolvedValue({
+    values: [{ id: 1, name: 'Scrum', type: 'scrum' }],
+    startAt: 0,
+    maxResults: 50,
+    isLast: true,
+  });
+  listSprintsMock.mockReset();
+  listSprintsMock.mockResolvedValue({
+    values: [{ id: 77, name: 'Sprint 77', state: 'active', self: '' }],
+    startAt: 0,
+    maxResults: 50,
+    isLast: true,
+  });
+  findBoardByNameMock.mockReset();
+  findBoardByNameMock.mockResolvedValue({ id: 5, name: 'Named', type: 'scrum' });
   tmp = await mkdtemp(join(tmpdir(), 'jirallm-edit-'));
 });
 
@@ -221,6 +247,46 @@ describe('runEdit', () => {
     expect(editIssueMock.mock.calls[0][1].customFields).toEqual({
       customfield_10051: { value: 'Always' },
     });
+  });
+
+  it('clears a field via --field name= (empty value → null)', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runEdit({ issueKey: 'PROJ-1', field: ['reproductionRate='] });
+    expect(editIssueMock.mock.calls[0][1].customFields).toEqual({ customfield_10051: null });
+  });
+
+  it('clears a raw field via --field customfield_NNNNN=null', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runEdit({ issueKey: 'PROJ-1', field: ['customfield_10020:number=null'] });
+    expect(editIssueMock.mock.calls[0][1].customFields).toEqual({ customfield_10020: null });
+  });
+
+  it('writes --sprint <id> to the detected sprint field', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runEdit({ issueKey: 'PROJ-1', sprint: '42' });
+    expect(editIssueMock.mock.calls[0][1].customFields).toEqual({ customfield_10020: 42 });
+    expect(listBoardsMock).not.toHaveBeenCalled();
+  });
+
+  it('resolves --sprint active via the single scrum board', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runEdit({ issueKey: 'PROJ-1', sprint: 'active' });
+    expect(listBoardsMock).toHaveBeenCalledWith({ projectKey: 'PROJ', type: 'scrum' });
+    expect(listSprintsMock).toHaveBeenCalledWith(1, { state: 'active' });
+    expect(editIssueMock.mock.calls[0][1].customFields).toEqual({ customfield_10020: 77 });
+  });
+
+  it('clears the sprint via --sprint none', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runEdit({ issueKey: 'PROJ-1', sprint: 'none' });
+    expect(editIssueMock.mock.calls[0][1].customFields).toEqual({ customfield_10020: null });
+  });
+
+  it('uses --board to disambiguate --sprint active', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runEdit({ issueKey: 'PROJ-1', sprint: 'active', board: 'Named' });
+    expect(findBoardByNameMock).toHaveBeenCalledWith('Named');
+    expect(listSprintsMock).toHaveBeenCalledWith(5, { state: 'active' });
   });
 
   it('keeps a component name containing a comma intact (no splitting)', async () => {

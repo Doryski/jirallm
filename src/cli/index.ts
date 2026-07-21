@@ -1082,13 +1082,15 @@ addImageOptions(
   .option('--components <name>', 'Component name (repeatable; pass once per component)', collect)
   .option(
     '-F, --field <pair>',
-    'Set a custom field: friendlyName=value or customfield_NNNNN[:type]=value (repeatable)',
+    'Set a custom field: friendlyName=value or customfield_NNNNN[:type]=value (repeatable). Use name= or name=null to clear.',
     collect
   )
+  .option('--sprint <id>', 'Sprint field: a sprint id, "active" (board\'s active sprint), or "none" to clear')
+  .option('--board <name>', 'Board name to disambiguate --sprint active (when the project has several scrum boards)')
   .option('--dry-run', 'Show what would be created without calling Jira')
   .option('--json', 'Output JSON instead of human-readable')
 )
-  .action(async (opts: { org?: string; project?: string; type: string; summary: string; description?: string; descriptionFile?: string; wiki?: boolean; assignee?: string; labels?: string; priority?: string; parent?: string; components?: string[]; field?: string[]; attach?: string[]; attachImages?: string[]; imageLayout?: string; imageWidth?: string; dryRun?: boolean; json?: boolean }) => {
+  .action(async (opts: { org?: string; project?: string; type: string; summary: string; description?: string; descriptionFile?: string; wiki?: boolean; assignee?: string; labels?: string; priority?: string; parent?: string; components?: string[]; field?: string[]; sprint?: string; board?: string; attach?: string[]; attachImages?: string[]; imageLayout?: string; imageWidth?: string; dryRun?: boolean; json?: boolean }) => {
     try {
       await runCreate({
         org: opts.org,
@@ -1104,6 +1106,8 @@ addImageOptions(
         parent: opts.parent,
         components: opts.components,
         field: opts.field,
+        sprint: opts.sprint,
+        board: opts.board,
         attach: opts.attach,
         attachImages: opts.attachImages,
         imageLayout: opts.imageLayout,
@@ -1135,6 +1139,8 @@ Examples:
   $ jirallm create -o acme -t Sub-task -s "Subtask of PROJ-1" --parent PROJ-1
   $ jirallm create -o acme -t Bug -s "Crash" --components Web --components API --field severity=High --field environment=PROD
   $ jirallm create -o acme -t Bug -s "Crash" --components "Frontend, Web & API"   # a single name containing a comma
+  $ jirallm create -o acme -t Story -s "Spike X" --sprint 42          # add to a sprint by id
+  $ jirallm create -o acme -t Story -s "Spike X" --sprint active      # add to the board's active sprint
   $ jirallm create -o acme -t Bug -s "test" --dry-run --json
   $ jirallm create -o acme -t Bug -s "Crash" --description-file ./repro.md --attach-images repro.png:"Stack trace"
 `
@@ -1162,13 +1168,15 @@ addImageOptions(
   .option('--components <name>', 'Component name (repeatable; replaces existing set)', collect)
   .option(
     '-F, --field <pair>',
-    'Set a custom field: friendlyName=value or customfield_NNNNN[:type]=value (repeatable)',
+    'Set a custom field: friendlyName=value or customfield_NNNNN[:type]=value (repeatable). Use name= or name=null to clear.',
     collect
   )
+  .option('--sprint <id>', 'Sprint field: a sprint id, "active" (board\'s active sprint), or "none" to clear')
+  .option('--board <name>', 'Board name to disambiguate --sprint active (when the project has several scrum boards)')
   .option('--dry-run', 'Show what would change without calling Jira')
   .option('--json', 'Output JSON instead of human-readable')
 )
-  .action(async (issueKey: string, opts: { org?: string; summary?: string; description?: string; descriptionFile?: string; wiki?: boolean; assignee?: string; unassign?: boolean; labels?: string; priority?: string; parent?: string; due?: string; components?: string[]; field?: string[]; attach?: string[]; attachImages?: string[]; imageLayout?: string; imageWidth?: string; dryRun?: boolean; json?: boolean }) => {
+  .action(async (issueKey: string, opts: { org?: string; summary?: string; description?: string; descriptionFile?: string; wiki?: boolean; assignee?: string; unassign?: boolean; labels?: string; priority?: string; parent?: string; due?: string; components?: string[]; field?: string[]; sprint?: string; board?: string; attach?: string[]; attachImages?: string[]; imageLayout?: string; imageWidth?: string; dryRun?: boolean; json?: boolean }) => {
     try {
       const { wiki, ...rest } = opts;
       await runEdit({ issueKey, ...rest, noWiki: wiki === false });
@@ -1180,6 +1188,7 @@ addImageOptions(
 --labels and --components REPLACE the existing sets; there is no add/remove syntax here.
 --unassign and --assignee are mutually exclusive (use one).
 Custom fields work like \`create\`: --field friendlyName=value or --field customfield_NNNNN[:type]=value.
+Clear any nullable field with an empty or null value: --field reproductionRate= or --field reproductionRate=null.
 
 Examples:
   $ jirallm edit PROJ-123 --summary "New title"
@@ -1188,6 +1197,10 @@ Examples:
   $ jirallm edit PROJ-123 --labels backend,p1 --priority High
   $ jirallm edit PROJ-123 --parent PROJ-1 --due 2026-08-01
   $ jirallm edit PROJ-123 --components Web --components API --field reproductionRate=Always
+  $ jirallm edit PROJ-123 --sprint 42            # move into sprint 42
+  $ jirallm edit PROJ-123 --sprint active        # move into the board's active sprint
+  $ jirallm edit PROJ-123 --sprint none          # remove from its sprint
+  $ jirallm edit PROJ-123 --field customfield_10020=   # clear any field (e.g. sprint) directly
   $ jirallm edit PROJ-123 --assignee 5ac1234567890abcdef
   $ jirallm edit PROJ-123 --unassign --dry-run --json
   $ jirallm edit PROJ-123 --description-file ./updated.md --attach-images after.png:"After the fix"

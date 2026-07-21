@@ -235,6 +235,10 @@ jirallm transition PROJ-123 --to "In Review"
 jirallm worklog -f ./worklogs.json
 jirallm create --org acme --project PROJ --type Task --summary "Spike" --description-file ./spike.md
 jirallm edit PROJ-123 --summary "New title" --labels a,b --priority High --parent PROJ-1 --due 2026-08-01
+jirallm edit PROJ-123 --sprint 42            # add to a sprint by id
+jirallm edit PROJ-123 --sprint active        # add to the board's active sprint (--board <name> if several)
+jirallm edit PROJ-123 --sprint none          # remove from its sprint
+jirallm edit PROJ-123 --field customfield_10020=   # clear any nullable field (empty or =null)
 jirallm assign PROJ-123 me
 jirallm link PROJ-1 "blocks" PROJ-2 --comment "blocked by infra work"
 jirallm link:rm 10042 --org acme

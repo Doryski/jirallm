@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { loadOrgProfile, resolveOptionalProjectKey } from '../../lib/config.js';
 import { JiraClient } from '../../lib/jiraClient.js';
 import { findFieldsOffCreateScreen, parseFieldFlags } from '../../lib/customFieldWrite.js';
+import { withResolvedSprint } from '../../lib/sprintWrite.js';
 import type { CustomFieldDefs } from '../../lib/exportFields.js';
 import { resolveAccountId } from '../resolveUser.js';
 import { printJson, shouldOutputJson } from '../jsonOutput.js';
@@ -26,6 +27,8 @@ export type CreateOptions = {
   parent?: string;
   components?: string[];
   field?: string[];
+  sprint?: string;
+  board?: string;
   attach?: string[];
   attachImages?: string[];
   imageLayout?: string;
@@ -47,7 +50,8 @@ export async function runCreate(opts: CreateOptions): Promise<void> {
 
   const labels = opts.labels?.split(',').map((s) => s.trim()).filter(Boolean);
   const components = opts.components?.map((s) => s.trim()).filter(Boolean);
-  const customFields = parseFieldFlags(opts.field, profile.org?.export?.customFieldDefs);
+  const customFieldDefs = profile.org?.export?.customFieldDefs;
+  const parsedFields = parseFieldFlags(opts.field, customFieldDefs);
 
   const projectKey = resolveOptionalProjectKey(profile.org, opts.projectKey);
   if (!projectKey) {
@@ -58,6 +62,12 @@ export async function runCreate(opts: CreateOptions): Promise<void> {
   }
 
   const client = new JiraClient(profile.config, profile.apiToken);
+
+  const customFields = await withResolvedSprint(client, parsedFields, opts.sprint, {
+    projectKey,
+    board: opts.board,
+    customFieldDefs,
+  });
 
   let assigneeAccountId: string | undefined;
   let assigneeDisplayName: string | undefined;

@@ -8,6 +8,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `--sprint <id|active|none>` on `create` and `edit`: a first-class Sprint flag. Pass a sprint id,
+  `active` to auto-resolve the project's scrum board's active sprint, or `none`/`null` to clear it —
+  no more `--field customfield_XXXXX:number=`. `--board <name>` disambiguates `active` when the
+  project has several scrum boards.
+- `--field name=` (empty) or `--field name=null` now clears any nullable field (writes JSON `null`),
+  for both friendly names and raw `customfield_NNNNN` ids.
 - `--attach-images <spec...>` on `comment`, `comment:edit`, `create` and `edit`: uploads images and
   embeds them as ADF `mediaSingle` nodes instead of wiki thumbnails, so they can be sized and
   aligned. Spec format is `file.png` or `file.png:"caption"`.
