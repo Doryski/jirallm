@@ -7,7 +7,7 @@ import { parseIssueKey } from '../issueKey.js';
 import { resolveOrg } from '../resolveOrg.js';
 import { printJson, shouldOutputJson } from '../jsonOutput.js';
 import { confirmOrAbort } from '../confirm.js';
-import { embedCommentImages, prepareAttachments, previewImages } from '../attachEmbeds.js';
+import { embedCommentImages, prepareAttachments, previewMedia } from '../attachEmbeds.js';
 import { containsMarkers } from '../../lib/adfMedia.js';
 
 export type CommentOptions = {
@@ -21,6 +21,7 @@ export type CommentOptions = {
   noThread?: boolean;
   attach?: string[];
   attachImages?: string[];
+  attachMedia?: string[];
   imageLayout?: string;
   imageWidth?: string;
   json?: boolean;
@@ -46,6 +47,7 @@ export type EditCommentOptions = {
   noWiki?: boolean;
   attach?: string[];
   attachImages?: string[];
+  attachMedia?: string[];
   imageLayout?: string;
   imageWidth?: string;
   dryRun?: boolean;
@@ -103,7 +105,7 @@ export async function runComment(issueKeyArg: string, opts: CommentOptions): Pro
       const fullBody = buildHeader(i, chunks.length, rootId) + chunk;
       return { index: i + 1, total: chunks.length, chars: fullBody.length, parent: rootId, body: fullBody };
     });
-    const embeddedImages = previewImages(applied.images, applied.layout);
+    const embeddedImages = previewMedia(applied.media, applied.layout);
     if (asJson) {
       printJson({
         dryRun: true,
@@ -119,7 +121,7 @@ export async function runComment(issueKeyArg: string, opts: CommentOptions): Pro
     for (const img of embeddedImages) {
       const px = img.pixels ? ` ${img.pixels.width}x${img.pixels.height}px` : '';
       console.log(
-        `  image: ${img.filename} (${img.layout}, ${img.width}%${px})${img.caption ? ` — "${img.caption}"` : ''}`
+        `  ${img.kind}: ${img.filename} (${img.layout}, ${img.width}%${px})${img.caption ? ` — "${img.caption}"` : ''}`
       );
     }
     for (const p of previews) {
@@ -141,7 +143,7 @@ export async function runComment(issueKeyArg: string, opts: CommentOptions): Pro
     const parentId = thread ? prevId : rootId;
     const result = await client.addComment(parsed.key, fullBody, parentId);
     posted.push({ id: result.id, index: i + 1, parent: parentId });
-    const chunkImages = applied.images.filter((img) => containsMarkers(fullBody, [img]));
+    const chunkImages = applied.media.filter((img) => containsMarkers(fullBody, [img]));
     if (chunkImages.length > 0) {
       await embedCommentImages(client, parsed.key, result.id, chunkImages, applied.layout);
     }
@@ -230,7 +232,7 @@ export async function runEditComment(
         org,
         id: existing.id,
         attachments: attachedNames,
-        embeddedImages: previewImages(applied.images, applied.layout),
+        embeddedImages: previewMedia(applied.media, applied.layout),
         chars: body.length,
         body,
       });
@@ -243,8 +245,8 @@ export async function runEditComment(
   }
 
   await client.updateComment(parsed.key, commentId, body);
-  if (applied.images.length > 0) {
-    await embedCommentImages(client, parsed.key, commentId, applied.images, applied.layout);
+  if (applied.media.length > 0) {
+    await embedCommentImages(client, parsed.key, commentId, applied.media, applied.layout);
   }
 
   if (asJson) {

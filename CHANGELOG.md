@@ -21,6 +21,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `wide`, `full-width`) and `--image-width` (percent of container width, 1–100, default 50).
 - `--attach` on `create` and `edit` (embeds into the issue description).
 - Image pixel dimensions are read from the file header (PNG/JPEG/GIF/WEBP/BMP) and sent to Jira.
+- `--attach-images` now accepts **any** file type, and `--attach-media` is available as an alias:
+  - videos (`.mp4`, `.mov`, `.webm`, `.mkv`, …) are sized inline via `ffprobe`, falling back to
+    parsing `ffmpeg -i` output; without either binary the video still embeds, just unsized;
+  - non-media files (`.txt`, `.log`, `.har`, …) embed as a compact ADF `mediaGroup` tile instead of a
+    full-width attachment card, and consecutive uncaptioned files share one tile row.
+- Positional embedding: write `@@media:<file>@@` on its own line in the body to place a file exactly
+  there instead of appending it. Matches the basename or the path passed on the command line, works
+  with `--no-wiki`, and warns (leaving the text alone) when nothing matches.
 
 ### Notes
 

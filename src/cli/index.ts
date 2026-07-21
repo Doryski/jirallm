@@ -509,7 +509,7 @@ addImageOptions(
         thread?: boolean;
         replyTo?: string;
         attach?: string[];
-        attachImages?: string[];
+        attachImages?: string[]; attachMedia?: string[];
         imageLayout?: string;
         imageWidth?: string;
         dryRun?: boolean;
@@ -527,6 +527,7 @@ addImageOptions(
           replyTo: opts.replyTo,
           attach: opts.attach,
           attachImages: opts.attachImages,
+          attachMedia: opts.attachMedia,
           imageLayout: opts.imageLayout,
           imageWidth: opts.imageWidth,
           dryRun: opts.dryRun,
@@ -549,6 +550,8 @@ Examples:
   $ jirallm comment PROJ-123 --file ./summary.md --attach shot.png verification.md
   $ jirallm comment PROJ-123 --file ./summary.md --attach-images shot.png:"New config field"
   $ jirallm comment PROJ-123 -t "see below" --attach-images a.png b.png --image-layout center --image-width 80
+  $ jirallm comment PROJ-123 --file ./repro.md --attach-media demo.webm:"Repro" trace.har
+  # place media where you want it: put @@media:demo.webm@@ on its own line in the body
 `
   );
 
@@ -726,7 +729,7 @@ addImageOptions(
         text?: string;
         wiki?: boolean;
         attach?: string[];
-        attachImages?: string[];
+        attachImages?: string[]; attachMedia?: string[];
         imageLayout?: string;
         imageWidth?: string;
         dryRun?: boolean;
@@ -741,6 +744,7 @@ addImageOptions(
           noWiki: opts.wiki === false,
           attach: opts.attach,
           attachImages: opts.attachImages,
+          attachMedia: opts.attachMedia,
           imageLayout: opts.imageLayout,
           imageWidth: opts.imageWidth,
           dryRun: opts.dryRun,
@@ -791,20 +795,24 @@ function collect(value: string, previous: string[] = []): string[] {
   return [...previous, value];
 }
 
-/** Shared --attach-images / --image-* options (ADF mediaSingle embedding). */
+/** Shared --attach-images / --attach-media / --image-* options (ADF media embedding). */
 function addImageOptions(cmd: Command): Command {
   return cmd
     .option(
       '--attach-images <spec...>',
-      'Upload images and embed them full-size as ADF mediaSingle. Format: file.png or file.png:"caption"'
+      'Upload media and embed it inline (images/videos sized as ADF mediaSingle, other files as compact tiles). Format: file.png or file.png:"caption"'
+    )
+    .option(
+      '--attach-media <spec...>',
+      'Alias for --attach-images; both accept images, videos and any other file'
     )
     .option(
       '--image-layout <layout>',
-      `Layout for --attach-images: ${IMAGE_LAYOUTS.join('|')} (default: ${DEFAULT_IMAGE_LAYOUT})`
+      `Layout for sized media: ${IMAGE_LAYOUTS.join('|')} (default: ${DEFAULT_IMAGE_LAYOUT})`
     )
     .option(
       '--image-width <n>',
-      `Percent of container width for --attach-images, 1-100 (default: ${DEFAULT_IMAGE_WIDTH})`
+      `Percent of container width for sized media, 1-100 (default: ${DEFAULT_IMAGE_WIDTH})`
     );
 }
 
@@ -1090,7 +1098,7 @@ addImageOptions(
   .option('--dry-run', 'Show what would be created without calling Jira')
   .option('--json', 'Output JSON instead of human-readable')
 )
-  .action(async (opts: { org?: string; project?: string; type: string; summary: string; description?: string; descriptionFile?: string; wiki?: boolean; assignee?: string; labels?: string; priority?: string; parent?: string; components?: string[]; field?: string[]; sprint?: string; board?: string; attach?: string[]; attachImages?: string[]; imageLayout?: string; imageWidth?: string; dryRun?: boolean; json?: boolean }) => {
+  .action(async (opts: { org?: string; project?: string; type: string; summary: string; description?: string; descriptionFile?: string; wiki?: boolean; assignee?: string; labels?: string; priority?: string; parent?: string; components?: string[]; field?: string[]; sprint?: string; board?: string; attach?: string[]; attachImages?: string[]; attachMedia?: string[]; imageLayout?: string; imageWidth?: string; dryRun?: boolean; json?: boolean }) => {
     try {
       await runCreate({
         org: opts.org,
@@ -1110,6 +1118,7 @@ addImageOptions(
         board: opts.board,
         attach: opts.attach,
         attachImages: opts.attachImages,
+        attachMedia: opts.attachMedia,
         imageLayout: opts.imageLayout,
         imageWidth: opts.imageWidth,
         dryRun: opts.dryRun,
@@ -1176,7 +1185,7 @@ addImageOptions(
   .option('--dry-run', 'Show what would change without calling Jira')
   .option('--json', 'Output JSON instead of human-readable')
 )
-  .action(async (issueKey: string, opts: { org?: string; summary?: string; description?: string; descriptionFile?: string; wiki?: boolean; assignee?: string; unassign?: boolean; labels?: string; priority?: string; parent?: string; due?: string; components?: string[]; field?: string[]; sprint?: string; board?: string; attach?: string[]; attachImages?: string[]; imageLayout?: string; imageWidth?: string; dryRun?: boolean; json?: boolean }) => {
+  .action(async (issueKey: string, opts: { org?: string; summary?: string; description?: string; descriptionFile?: string; wiki?: boolean; assignee?: string; unassign?: boolean; labels?: string; priority?: string; parent?: string; due?: string; components?: string[]; field?: string[]; sprint?: string; board?: string; attach?: string[]; attachImages?: string[]; attachMedia?: string[]; imageLayout?: string; imageWidth?: string; dryRun?: boolean; json?: boolean }) => {
     try {
       const { wiki, ...rest } = opts;
       await runEdit({ issueKey, ...rest, noWiki: wiki === false });

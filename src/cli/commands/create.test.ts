@@ -320,7 +320,7 @@ describe('runCreate', () => {
       version: 1,
       type: 'doc',
       content: [
-        { type: 'paragraph', content: [{ type: 'text', text: '⟦jirallm-img-0⟧' }] },
+        { type: 'paragraph', content: [{ type: 'text', text: '⟦jirallm-media-0⟧' }] },
         {
           type: 'mediaGroup',
           content: [{ type: 'media', attrs: { type: 'file', id: 'uuid-1', collection: '' } }],
@@ -337,7 +337,7 @@ describe('runCreate', () => {
     });
 
     expect(uploadAttachmentMock).toHaveBeenCalledWith('PROJ-99', '/tmp/repro.png');
-    expect(editIssueMock.mock.calls[0][1].descriptionMarkdown).toContain('⟦jirallm-img-0⟧');
+    expect(editIssueMock.mock.calls[0][1].descriptionMarkdown).toContain('⟦jirallm-media-0⟧');
     const [issueKey, adf] = updateIssueDescriptionAdfMock.mock.calls[0];
     expect(issueKey).toBe('PROJ-99');
     expect(adf.content[0].type).toBe('mediaSingle');

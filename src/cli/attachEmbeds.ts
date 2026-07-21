@@ -2,20 +2,22 @@ import { basename } from 'path';
 import type { JiraClient } from '../lib/jiraClient.js';
 import {
   applyMediaSingle,
-  buildImageEmbedBlock,
-  describeImage,
-  imageMarker,
+  buildMediaEmbedBlock,
+  describeMedia,
   isImageFile,
+  mediaMarker,
   parseImageLayout,
-  parseImageSpec,
+  parseMediaSpec,
   parseImageWidth,
-  type EmbeddedImage,
+  placeMediaMarkers,
+  type EmbeddedMedia,
   type MediaLayoutOptions,
 } from '../lib/adfMedia.js';
 
 export type AttachOptions = {
   attach?: string[];
   attachImages?: string[];
+  attachMedia?: string[];
   imageLayout?: string;
   imageWidth?: string;
 };
@@ -23,17 +25,18 @@ export type AttachOptions = {
 export type PreparedAttachments = {
   body: string;
   attachedNames: string[];
-  images: EmbeddedImage[];
+  media: EmbeddedMedia[];
   layout: MediaLayoutOptions;
 };
 
-export function previewImages(images: EmbeddedImage[], layout: MediaLayoutOptions) {
-  return images.map((img) => ({
-    filename: img.filename,
-    caption: img.caption,
+export function previewMedia(media: EmbeddedMedia[], layout: MediaLayoutOptions) {
+  return media.map((item) => ({
+    filename: item.filename,
+    kind: item.kind,
+    caption: item.caption,
     layout: layout.layout,
     width: layout.width,
-    pixels: img.size,
+    pixels: item.size,
   }));
 }
 
@@ -45,7 +48,7 @@ export async function embedCommentImages(
   client: JiraClient,
   issueKey: string,
   commentId: string,
-  images: EmbeddedImage[],
+  media: EmbeddedMedia[],
   layout: MediaLayoutOptions
 ): Promise<void> {
   const warnings = await applyMediaSingle(
@@ -53,7 +56,7 @@ export async function embedCommentImages(
       get: async () => (await client.getComment(issueKey, commentId)).body,
       put: (doc) => client.updateCommentAdf(issueKey, commentId, doc),
     },
-    images,
+    media,
     layout
   );
   reportWarnings(warnings);
@@ -62,7 +65,7 @@ export async function embedCommentImages(
 export async function embedDescriptionImages(
   client: JiraClient,
   issueKey: string,
-  images: EmbeddedImage[],
+  media: EmbeddedMedia[],
   layout: MediaLayoutOptions
 ): Promise<void> {
   const warnings = await applyMediaSingle(
@@ -70,7 +73,7 @@ export async function embedDescriptionImages(
       get: () => client.getIssueDescriptionAdf(issueKey),
       put: (doc) => client.updateIssueDescriptionAdf(issueKey, doc),
     },
-    images,
+    media,
     layout
   );
   reportWarnings(warnings);
@@ -95,6 +98,12 @@ async function uploadOrPreview(
   return uploaded[0]?.filename ?? basename(filePath);
 }
 
+function appendBlocks(body: string, blocks: string[]): string {
+  const joined = blocks.filter(Boolean).join('\n\n');
+  if (!joined) return body;
+  return `${body.replace(/\s+$/, '')}\n\n${joined}\n`;
+}
+
 export async function prepareAttachments(
   client: JiraClient,
   issueKey: string,
@@ -103,19 +112,11 @@ export async function prepareAttachments(
   dryRun: boolean
 ): Promise<PreparedAttachments> {
   const layout = resolveMediaLayout(opts);
-  const specs = (opts.attachImages ?? []).map(parseImageSpec);
-  const imageSpecs = specs.filter((s) => isImageFile(s.path));
-  const nonImageSpecs = specs.filter((s) => !isImageFile(s.path));
-  const plainFiles = [...(opts.attach ?? []), ...nonImageSpecs.map((s) => s.path)];
+  const specs = [...(opts.attachImages ?? []), ...(opts.attachMedia ?? [])].map(parseMediaSpec);
+  const plainFiles = opts.attach ?? [];
 
-  for (const spec of nonImageSpecs) {
-    console.warn(
-      `Warning: ${basename(spec.path)} is not an image — embedding it as an attachment card.`
-    );
-  }
-
-  if (plainFiles.length === 0 && imageSpecs.length === 0) {
-    return { body: rawBody, attachedNames: [], images: [], layout };
+  if (plainFiles.length === 0 && specs.length === 0) {
+    return { body: rawBody, attachedNames: [], media: [], layout };
   }
 
   const attachedNames: string[] = [];
@@ -126,22 +127,26 @@ export async function prepareAttachments(
     attachedNames.push(name);
   }
 
-  const images: EmbeddedImage[] = [];
-  for (const spec of imageSpecs) {
+  const media: EmbeddedMedia[] = [];
+  for (const spec of specs) {
     const name = await uploadOrPreview(client, issueKey, spec.path, dryRun);
     attachedNames.push(name);
-    const described = describeImage(spec.path, spec.caption, images.length);
-    images.push({ ...described, filename: name, marker: imageMarker(images.length) });
+    const described = await describeMedia(spec.path, spec.caption, media.length);
+    media.push({ ...described, filename: name, marker: mediaMarker(media.length) });
   }
 
-  const blocks = [plainNames.map(embedForAttachment).join('\n'), buildImageEmbedBlock(images)]
-    .filter(Boolean)
-    .join('\n\n');
+  const placement = placeMediaMarkers(rawBody, media);
+  reportWarnings(placement.warnings);
+  const placed = new Set(placement.placed.map((item) => item.marker));
+  const trailing = media.filter((item) => !placed.has(item.marker));
 
   return {
-    body: `${rawBody.replace(/\s+$/, '')}\n\n${blocks}\n`,
+    body: appendBlocks(placement.body, [
+      plainNames.map(embedForAttachment).join('\n'),
+      buildMediaEmbedBlock(trailing),
+    ]),
     attachedNames,
-    images,
+    media,
     layout,
   };
 }

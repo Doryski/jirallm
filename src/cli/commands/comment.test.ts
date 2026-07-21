@@ -208,7 +208,7 @@ describe('runComment', () => {
         type: 'doc',
         content: [
           { type: 'paragraph', content: [{ type: 'text', text: 'summary body' }] },
-          { type: 'paragraph', content: [{ type: 'text', text: '⟦jirallm-img-0⟧' }] },
+          { type: 'paragraph', content: [{ type: 'text', text: '⟦jirallm-media-0⟧' }] },
           {
             type: 'mediaGroup',
             content: [{ type: 'media', attrs: { type: 'file', id: 'uuid-1', collection: '' } }],
@@ -226,7 +226,7 @@ describe('runComment', () => {
     });
 
     const posted = addCommentMock.mock.calls[0][1] as string;
-    expect(posted).toContain('⟦jirallm-img-0⟧');
+    expect(posted).toContain('⟦jirallm-media-0⟧');
     expect(posted).toContain('[^shot.png]');
 
     const [issueKey, commentId, adf] = updateCommentAdfMock.mock.calls[0];
@@ -260,7 +260,7 @@ describe('runComment', () => {
     expect(updateCommentAdfMock).not.toHaveBeenCalled();
     const parsed = JSON.parse(writes.join(''));
     expect(parsed.embeddedImages).toEqual([
-      { filename: 'shot.png', caption: 'Podpis', layout: 'center', width: 80 },
+      { filename: 'shot.png', kind: 'image', caption: 'Podpis', layout: 'center', width: 80 },
     ]);
   });
 
@@ -275,20 +275,59 @@ describe('runComment', () => {
     expect(addCommentMock).not.toHaveBeenCalled();
   });
 
-  it('embeds a non-image passed to --attach-images as a plain attachment card', async () => {
+  it('embeds a non-image passed to --attach-images as a compact mediaGroup tile', async () => {
     uploadAttachmentMock.mockImplementation(async (_key: string, file: string) => [
       { id: `id-${file}`, filename: file.split('/').pop(), size: 1 },
     ]);
-    await runComment('PROJ-1', {
-      text: 'body',
-      noWiki: true,
-      attachImages: ['/tmp/report.txt'],
-    });
+    getCommentMock.mockImplementation(async () => ({
+      id: 'new-1',
+      author: { displayName: 'Alice' },
+      created: '2026-01-01',
+      body: {
+        version: 1,
+        type: 'doc',
+        content: [
+          { type: 'paragraph', content: [{ type: 'text', text: 'body' }] },
+          { type: 'paragraph', content: [{ type: 'text', text: '⟦jirallm-media-0⟧' }] },
+          {
+            type: 'mediaGroup',
+            content: [{ type: 'media', attrs: { type: 'file', id: 'uuid-f', collection: '' } }],
+          },
+        ],
+      },
+    }));
+
+    await runComment('PROJ-1', { text: 'body', noWiki: true, attachImages: ['/tmp/report.txt'] });
 
     const posted = addCommentMock.mock.calls[0][1] as string;
     expect(posted).toContain('[^report.txt]');
-    expect(posted).not.toContain('jirallm-img');
-    expect(updateCommentAdfMock).not.toHaveBeenCalled();
+    expect(posted).toContain('⟦jirallm-media-0⟧');
+
+    const [, , adf] = updateCommentAdfMock.mock.calls[0];
+    expect(adf.content[1]).toEqual({
+      type: 'mediaGroup',
+      content: [{ type: 'media', attrs: { type: 'file', id: 'uuid-f', collection: '' } }],
+    });
+  });
+
+  it('places media at an @@media:...@@ placeholder instead of appending it', async () => {
+    uploadAttachmentMock.mockImplementation(async (_key: string, file: string) => [
+      { id: `id-${file}`, filename: file.split('/').pop(), size: 1 },
+    ]);
+    getCommentMock.mockResolvedValue({
+      id: 'new-1',
+      author: { displayName: 'Alice' },
+      created: '2026-01-01',
+      body: { version: 1, type: 'doc', content: [] },
+    });
+    await runComment('PROJ-1', {
+      text: 'intro\n\n@@media:shot.png@@\n\noutro',
+      noWiki: true,
+      attachImages: ['/tmp/shot.png'],
+    });
+
+    const posted = addCommentMock.mock.calls[0][1] as string;
+    expect(posted).toBe('intro\n\n⟦jirallm-media-0⟧\n\n[^shot.png]\n\noutro');
   });
 });
 
@@ -374,7 +413,7 @@ describe('runEditComment', () => {
         version: 1,
         type: 'doc',
         content: [
-          { type: 'paragraph', content: [{ type: 'text', text: '⟦jirallm-img-0⟧' }] },
+          { type: 'paragraph', content: [{ type: 'text', text: '⟦jirallm-media-0⟧' }] },
           {
             type: 'mediaGroup',
             content: [{ type: 'media', attrs: { type: 'file', id: 'uuid-9', collection: '' } }],
