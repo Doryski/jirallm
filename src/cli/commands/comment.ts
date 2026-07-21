@@ -36,6 +36,7 @@ export type DeleteCommentOptions = {
 export type CommentListOptions = {
   org?: string;
   json?: boolean;
+  rendered?: boolean;
 };
 
 export type EditCommentOptions = {
@@ -164,9 +165,9 @@ export async function runCommentList(
   const profile = await loadProfile({ org, project: parsed.projectKey });
   const client = new JiraClient(profile.config, profile.apiToken);
 
-  const comments = await client.fetchIssueComments(parsed.key);
+  const comments = await client.fetchIssueComments(parsed.key, { rendered: opts.rendered });
 
-  if (shouldOutputJson(opts)) {
+  if (opts.rendered || shouldOutputJson(opts)) {
     printJson({
       issueKey: parsed.key,
       comments: comments.map((c) => ({
@@ -175,6 +176,7 @@ export async function runCommentList(
         created: c.created,
         snippet: commentSnippet(client, c),
         body: commentBody(client, c),
+        ...(opts.rendered ? { renderedBody: c.renderedBody } : {}),
       })),
     });
     return;

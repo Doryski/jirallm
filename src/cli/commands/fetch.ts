@@ -19,6 +19,8 @@ export type FetchOptions = {
   full?: boolean;
   fields?: string;
   raw?: boolean;
+  rendered?: boolean;
+  expand?: string;
 };
 
 function buildCommentsSection(data: JiraTaskData): string {
@@ -78,8 +80,16 @@ export async function runFetch(opts: FetchOptions): Promise<void> {
   const profile = await loadProfile({ org, project: parsed.projectKey });
   const client = new JiraClient(profile.config, profile.apiToken);
 
-  if (opts.raw) {
-    printJson(await client.fetchIssueRaw(key));
+  if (opts.raw || opts.rendered || opts.expand) {
+    const expand = new Set(['names']);
+    if (opts.rendered) expand.add('renderedFields');
+    if (opts.expand) {
+      for (const part of opts.expand.split(',')) {
+        const trimmed = part.trim();
+        if (trimmed) expand.add(trimmed);
+      }
+    }
+    printJson(await client.fetchIssueRaw(key, [...expand]));
     return;
   }
 

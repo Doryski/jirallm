@@ -240,9 +240,31 @@ describe('runFetch', () => {
     };
     fetchIssueRawMock.mockResolvedValue(rawIssue);
     await runFetch({ issueKey: 'PROJ-1', org: 'acme', raw: true });
-    expect(fetchIssueRawMock).toHaveBeenCalledWith('PROJ-1');
+    expect(fetchIssueRawMock).toHaveBeenCalledWith('PROJ-1', ['names']);
     expect(fetchIssueDetailsMock).not.toHaveBeenCalled();
     expect(JSON.parse(writes.join(''))).toEqual(rawIssue);
+  });
+
+  it('--rendered expands renderedFields and dumps the raw object as JSON', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    const rawIssue = {
+      key: 'PROJ-1',
+      fields: { description: { type: 'doc' } },
+      renderedFields: { description: '<h1>body</h1>' },
+    };
+    fetchIssueRawMock.mockResolvedValue(rawIssue);
+    await runFetch({ issueKey: 'PROJ-1', org: 'acme', rendered: true });
+    expect(fetchIssueRawMock).toHaveBeenCalledWith('PROJ-1', ['names', 'renderedFields']);
+    expect(fetchIssueDetailsMock).not.toHaveBeenCalled();
+    expect(JSON.parse(writes.join(''))).toEqual(rawIssue);
+  });
+
+  it('--expand passes through extra expand params (deduped with names) on the raw object', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    fetchIssueRawMock.mockResolvedValue({ key: 'PROJ-1', fields: {} });
+    await runFetch({ issueKey: 'PROJ-1', org: 'acme', expand: 'changelog, renderedFields , names' });
+    expect(fetchIssueRawMock).toHaveBeenCalledWith('PROJ-1', ['names', 'changelog', 'renderedFields']);
+    expect(fetchIssueDetailsMock).not.toHaveBeenCalled();
   });
 
   it('still prints full data JSON in json mode with flags', async () => {
