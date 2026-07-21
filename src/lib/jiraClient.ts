@@ -201,6 +201,18 @@ export type JiraWatcher = {
   active?: boolean;
 };
 
+export type UploadedAttachment = {
+  id: string;
+  filename: string;
+  size: number;
+  self?: string;
+  mimeType?: string;
+  created?: string;
+  content?: string;
+  thumbnail?: string;
+  author?: { accountId?: string; displayName?: string; emailAddress?: string };
+};
+
 export type JiraIssueLink = {
   id: string;
   self?: string;
@@ -1614,10 +1626,7 @@ export class JiraClient {
     }
   }
 
-  async uploadAttachment(
-    issueKey: string,
-    filePath: string
-  ): Promise<Array<{ id: string; filename: string; size: number; mimeType?: string }>> {
+  async uploadAttachment(issueKey: string, filePath: string): Promise<UploadedAttachment[]> {
     await stat(filePath);
     const buf = await readFile(filePath);
     const form = new FormData();
@@ -1640,9 +1649,7 @@ export class JiraClient {
         `Jira uploadAttachment failed: ${response.status} ${response.statusText}\n${errorText}`
       );
     }
-    return response.json() as Promise<
-      Array<{ id: string; filename: string; size: number; mimeType?: string }>
-    >;
+    return response.json() as Promise<UploadedAttachment[]>;
   }
 
   async getAttachmentMeta(attachmentId: string): Promise<{

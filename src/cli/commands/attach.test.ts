@@ -71,6 +71,37 @@ describe('runAttach', () => {
     const parsed = JSON.parse(writes.join(''));
     expect(parsed.issueKey).toBe('PROJ-1');
     expect(parsed.attachments).toHaveLength(2);
+    expect(parsed.attachments).toEqual([
+      { id: 'a1', filename: 'a.png', size: 10 },
+      { id: 'b1', filename: 'b.txt', size: 5 },
+    ]);
+  });
+
+  it('emits the full attachment objects Jira returns under --json', async () => {
+    const created = {
+      id: '99021',
+      self: 'https://x/rest/api/3/attachment/99021',
+      filename: 'a.png',
+      size: 10,
+      mimeType: 'image/png',
+      created: '2026-07-21T13:24:22.000+0200',
+      content: 'https://x/rest/api/3/attachment/content/99021',
+      thumbnail: 'https://x/rest/api/3/attachment/thumbnail/99021',
+      author: { accountId: 'acc-1', displayName: 'Jane Doe' },
+    };
+    uploadAttachmentMock.mockResolvedValueOnce([created]);
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runAttach({ issueKey: 'PROJ-1', files: ['./a.png'], json: true });
+    const parsed = JSON.parse(writes.join(''));
+    expect(parsed).toEqual({ issueKey: 'PROJ-1', attachments: [created] });
+  });
+
+  it('auto-emits JSON when stdout is not a TTY', async () => {
+    uploadAttachmentMock.mockResolvedValueOnce([{ id: 'a1', filename: 'a.png', size: 10 }]);
+    Object.defineProperty(process.stdout, 'isTTY', { value: false, configurable: true });
+    await runAttach({ issueKey: 'PROJ-1', files: ['./a.png'] });
+    expect(logs).toEqual([]);
+    expect(JSON.parse(writes.join('')).attachments[0].id).toBe('a1');
   });
 
   it('does NOT call uploadAttachment on --dry-run and reports the resolved org', async () => {

@@ -412,6 +412,21 @@ describe('JiraClient.uploadAttachment', () => {
     expect((file as Blob).size).toBe(11);
   });
 
+  it('returns the created attachment objects verbatim, including content URL and mimeType', async () => {
+    const created = {
+      id: '99021',
+      self: 'https://jira.example.com/rest/api/3/attachment/99021',
+      filename: 'hello.txt',
+      size: 11,
+      mimeType: 'text/plain',
+      created: '2026-07-21T13:24:22.000+0200',
+      content: 'https://jira.example.com/rest/api/3/attachment/content/99021',
+      author: { accountId: 'acc-1', displayName: 'Jane Doe' },
+    };
+    const { client } = captureFetch(() => ({ json: [created] }));
+    await expect(client.uploadAttachment('PROJ-1', filePath)).resolves.toEqual([created]);
+  });
+
   it('does NOT send a Content-Type header (fetch sets multipart boundary)', async () => {
     const { client, calls } = captureFetch(() => ({ json: [] }));
     await client.uploadAttachment('PROJ-1', filePath);
