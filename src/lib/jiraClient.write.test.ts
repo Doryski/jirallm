@@ -98,6 +98,21 @@ describe('JiraClient.createIssue', () => {
     expect(body.fields.description).toBe('*bold* text');
   });
 
+  it('sends the description as-is when noWiki is set', async () => {
+    const { client, calls } = captureFetch(() => ({
+      json: { id: '1', key: 'PROJ-1', self: 'x' },
+    }));
+    await client.createIssue({
+      projectKey: 'PROJ',
+      issueType: 'Task',
+      summary: 's',
+      descriptionMarkdown: 'h2. Heading\n# ordered item',
+      noWiki: true,
+    });
+    const body = calls[0].body as { fields: Record<string, unknown> };
+    expect(body.fields.description).toBe('h2. Heading\n# ordered item');
+  });
+
   it('omits optional fields when not provided', async () => {
     const { client, calls } = captureFetch(() => ({
       json: { id: '1', key: 'PROJ-1', self: 'x' },
@@ -176,6 +191,16 @@ describe('JiraClient.editIssue', () => {
     await client.editIssue('PROJ-1', { descriptionMarkdown: '_italic_' });
     const body = calls[0].body as { fields: Record<string, unknown> };
     expect(body.fields.description).toBe('_italic_');
+  });
+
+  it('sends the description as-is when noWiki is set', async () => {
+    const { client, calls } = captureFetch(() => ({ status: 204 }));
+    await client.editIssue('PROJ-1', {
+      descriptionMarkdown: 'h2. Heading\n# ordered item',
+      noWiki: true,
+    });
+    const body = calls[0].body as { fields: Record<string, unknown> };
+    expect(body.fields.description).toBe('h2. Heading\n# ordered item');
   });
 
   it('maps components and customFields on edit', async () => {

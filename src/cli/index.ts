@@ -1060,6 +1060,7 @@ addImageOptions(
   .requiredOption('-s, --summary <text>', 'Issue summary')
   .option('-d, --description <text>', 'Description (markdown)')
   .option('--description-file <path>', 'Read description (markdown) from a file')
+  .option('--no-wiki', 'Send the description as-is (skip markdown → wiki conversion)')
   .option('-a, --assignee <user>', 'Assignee: an accountId, email, display name, or "me"')
   .option('-l, --labels <list>', 'Comma-separated labels')
   .option('--priority <name>', 'Priority name (e.g. High)')
@@ -1073,7 +1074,7 @@ addImageOptions(
   .option('--dry-run', 'Show what would be created without calling Jira')
   .option('--json', 'Output JSON instead of human-readable')
 )
-  .action(async (opts: { org?: string; project?: string; type: string; summary: string; description?: string; descriptionFile?: string; assignee?: string; labels?: string; priority?: string; parent?: string; components?: string[]; field?: string[]; attach?: string[]; attachImages?: string[]; imageLayout?: string; imageWidth?: string; dryRun?: boolean; json?: boolean }) => {
+  .action(async (opts: { org?: string; project?: string; type: string; summary: string; description?: string; descriptionFile?: string; wiki?: boolean; assignee?: string; labels?: string; priority?: string; parent?: string; components?: string[]; field?: string[]; attach?: string[]; attachImages?: string[]; imageLayout?: string; imageWidth?: string; dryRun?: boolean; json?: boolean }) => {
     try {
       await runCreate({
         org: opts.org,
@@ -1082,6 +1083,7 @@ addImageOptions(
         summary: opts.summary,
         description: opts.description,
         descriptionFile: opts.descriptionFile,
+        noWiki: opts.wiki === false,
         assignee: opts.assignee,
         labels: opts.labels,
         priority: opts.priority,
@@ -1104,7 +1106,7 @@ Run \`jirallm issuetypes -o <org>\` to discover valid --type values.
 Run \`jirallm components -o <org> -P <project>\` to discover valid --components names.
 Run \`jirallm fields -o <org> -P <project> --type Bug\` to discover custom field ids and select options.
 Get a user's accountId via \`jirallm me -o <org>\` (for the current user).
---description is markdown; it gets converted to Jira wiki on the way in.
+--description is markdown; it gets converted to Jira wiki on the way in (pass --no-wiki to send it as-is).
 
 Custom fields:
   Friendly names defined under [orgs.<org>.export.custom_fields] resolve automatically
@@ -1114,6 +1116,7 @@ Custom fields:
 Examples:
   $ jirallm create -o acme -t Task -s "Investigate flaky test"
   $ jirallm create -o acme -P PROJ -t Bug -s "Crash on save" --description-file ./repro.md
+  $ jirallm create -o acme -t Task -s "Templated" --description-file ./wiki.txt --no-wiki   # send wiki markup as-is
   $ jirallm create -o acme -t Story -s "Spike X" -l backend,p1 --priority High
   $ jirallm create -o acme -t Sub-task -s "Subtask of PROJ-1" --parent PROJ-1
   $ jirallm create -o acme -t Bug -s "Crash" --components Web --components API --field severity=High --field environment=PROD
@@ -1135,6 +1138,7 @@ addImageOptions(
   .option('-s, --summary <text>', 'New summary')
   .option('-d, --description <text>', 'New description (markdown)')
   .option('--description-file <path>', 'Read description (markdown) from a file')
+  .option('--no-wiki', 'Send the description as-is (skip markdown → wiki conversion)')
   .option('-a, --assignee <user>', 'Assignee: an accountId, email, display name, or "me"')
   .option('--unassign', 'Unassign the issue (clears assignee)')
   .option('-l, --labels <list>', 'Comma-separated labels (replaces existing)')
@@ -1150,8 +1154,11 @@ addImageOptions(
   .option('--dry-run', 'Show what would change without calling Jira')
   .option('--json', 'Output JSON instead of human-readable')
 )
-  .action(async (issueKey: string, opts: { org?: string; summary?: string; description?: string; descriptionFile?: string; assignee?: string; unassign?: boolean; labels?: string; priority?: string; parent?: string; due?: string; components?: string[]; field?: string[]; attach?: string[]; attachImages?: string[]; imageLayout?: string; imageWidth?: string; dryRun?: boolean; json?: boolean }) => {
-    try { await runEdit({ issueKey, ...opts }); } catch (err) { exitOnError(err); }
+  .action(async (issueKey: string, opts: { org?: string; summary?: string; description?: string; descriptionFile?: string; wiki?: boolean; assignee?: string; unassign?: boolean; labels?: string; priority?: string; parent?: string; due?: string; components?: string[]; field?: string[]; attach?: string[]; attachImages?: string[]; imageLayout?: string; imageWidth?: string; dryRun?: boolean; json?: boolean }) => {
+    try {
+      const { wiki, ...rest } = opts;
+      await runEdit({ issueKey, ...rest, noWiki: wiki === false });
+    } catch (err) { exitOnError(err); }
   })
   .addHelpText(
     'after',
@@ -1163,6 +1170,7 @@ Custom fields work like \`create\`: --field friendlyName=value or --field custom
 Examples:
   $ jirallm edit PROJ-123 --summary "New title"
   $ jirallm edit PROJ-123 --description-file ./updated.md
+  $ jirallm edit PROJ-123 --description-file ./wiki.txt --no-wiki   # send wiki markup as-is
   $ jirallm edit PROJ-123 --labels backend,p1 --priority High
   $ jirallm edit PROJ-123 --parent PROJ-1 --due 2026-08-01
   $ jirallm edit PROJ-123 --components Web --components API --field reproductionRate=Always

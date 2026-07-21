@@ -138,6 +138,12 @@ describe('runEdit', () => {
     expect(editIssueMock.mock.calls[0][1].descriptionMarkdown).toBe('content');
   });
 
+  it('forwards noWiki to editIssue when --no-wiki is set', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runEdit({ issueKey: 'PROJ-1', description: 'h2. Heading', noWiki: true });
+    expect(editIssueMock.mock.calls[0][1].noWiki).toBe(true);
+  });
+
   it('does NOT call editIssue on --dry-run; emits JSON when requested', async () => {
     Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
     await runEdit({ issueKey: 'PROJ-1', summary: 'new', dryRun: true, json: true });
