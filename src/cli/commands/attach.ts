@@ -1,6 +1,6 @@
 import { stat } from 'fs/promises';
 import { loadOrgProfile, loadProfile } from '../../lib/config.js';
-import { JiraClient } from '../../lib/jiraClient.js';
+import { JiraClient, type UploadedAttachment } from '../../lib/jiraClient.js';
 import { parseIssueKey } from '../issueKey.js';
 import { resolveOrg } from '../resolveOrg.js';
 import { printJson, shouldOutputJson } from '../jsonOutput.js';
@@ -44,7 +44,7 @@ export async function runAttach(opts: AttachOptions): Promise<void> {
   }
 
   const client = new JiraClient(profile.config, profile.apiToken);
-  const uploaded: Array<{ id: string; filename: string; size: number }> = [];
+  const uploaded: UploadedAttachment[] = [];
   for (const file of opts.files) {
     const result = await client.uploadAttachment(parsed.key, file);
     for (const a of result) uploaded.push(a);

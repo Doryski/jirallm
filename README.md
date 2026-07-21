@@ -202,7 +202,7 @@ cat ./triage-bundle/PROJ-123/index.md | pbcopy
 
 ## For agents (CLI commands)
 
-Every read command supports `--json` (and automatically switches to JSON when stdout is not a TTY), so they're safe to pipe into `jq` or feed back into an agent. Every write command supports `--dry-run`.
+Every command supports `--json` (and automatically switches to JSON when stdout is not a TTY), so they're safe to pipe into `jq` or feed back into an agent. Write commands echo what they created, so success can be confirmed from the command itself without a follow-up read. Every write command also supports `--dry-run`.
 
 Discovery & search:
 
@@ -246,6 +246,7 @@ jirallm assign PROJ-123 me
 jirallm link PROJ-1 "blocks" PROJ-2 --comment "blocked by infra work"
 jirallm link:rm 10042 --org acme
 jirallm attach PROJ-123 ./screenshot.png ./recording.mp4
+jirallm attach PROJ-123 ./screenshot.png --json | jq -r '.attachments[] | "\(.id) \(.filename)"'
 jirallm attach:rm 99021 --org acme
 jirallm watchers PROJ-123 --add me
 ```
