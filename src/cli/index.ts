@@ -36,6 +36,7 @@ import { runComponents } from './commands/components.js';
 import { runFields } from './commands/fields.js';
 import { runLinkTypes } from './commands/linktypes.js';
 import { runMe } from './commands/me.js';
+import { runUsers } from './commands/users.js';
 import { runFetch } from './commands/fetch.js';
 import { runCreate } from './commands/create.js';
 import { runEdit } from './commands/edit.js';
@@ -1013,6 +1014,34 @@ or pass "me" as a shorthand in commands that resolve it (\`assign\`, \`watchers\
 Examples:
   $ jirallm me -o acme
   $ jirallm me -o acme --json | jq -r .accountId
+`
+  );
+
+program
+  .command('users <query>')
+  .alias('user')
+  .description('Look up Jira users by email, display name or accountId prefix.')
+  .option('-o, --org <name>', 'Organization name')
+  .option('-P, --project <key>', 'Restrict to users assignable in a project')
+  .option('--issue <issue-key>', 'Restrict to users assignable on an issue')
+  .option('--limit <n>', 'Maximum results (default 50)')
+  .option('--json', 'Output JSON instead of human-readable')
+  .action(async (query: string, opts: { org?: string; project?: string; issue?: string; limit?: string; json?: boolean }) => {
+    try { await runUsers({ query, ...opts }); } catch (err) { exitOnError(err); }
+  })
+  .addHelpText(
+    'after',
+    `
+Output is an array of users — use the accountId as --assignee for \`create\` / \`edit\` /
+\`assign\`, as \`watchers --add\`, or to build an [~accountId:...] mention in a comment.
+Pass "me" as the query to get the authenticated user (same as \`jirallm me\`).
+
+Examples:
+  $ jirallm users someone@example.com -o acme
+  $ jirallm users someone@example.com -o acme --json | jq -r '.[0].accountId'
+  $ jirallm users "Jane Doe" -o acme --json
+  $ jirallm users Jane --issue PROJ-123        # only users assignable on that issue
+  $ jirallm users Jane -o acme -P PROJ --limit 10
 `
   );
 

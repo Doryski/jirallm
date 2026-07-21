@@ -8,6 +8,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `users <query>` (alias `user`): resolve any Jira user to their `accountId` by email, display name
+  or accountId prefix — no more `assign --dry-run` detour. Supports `-P/--project` and
+  `--issue` to restrict results to assignable users, `--limit`, and `me` as a query shorthand.
 - `--sprint <id|active|none>` on `create` and `edit`: a first-class Sprint flag. Pass a sprint id,
   `active` to auto-resolve the project's scrum board's active sprint, or `none`/`null` to clear it —
   no more `--field customfield_XXXXX:number=`. `--board <name>` disambiguates `active` when the
