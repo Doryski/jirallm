@@ -16,6 +16,8 @@ export type JiraUser = {
   accountId: string;
   displayName: string;
   emailAddress?: string;
+  active?: boolean;
+  accountType?: string;
 };
 
 type JiraADFContent = {

@@ -208,6 +208,9 @@ Discovery & search:
 
 ```bash
 jirallm me --org acme --json
+jirallm users someone@example.com --org acme --json | jq -r '.[0].accountId'
+jirallm users "Jane Doe" --org acme --json
+jirallm users Jane --issue PROJ-123 --json   # only users assignable on that issue
 jirallm projects --org acme --json
 jirallm boards --org acme --project PROJ --json
 jirallm sprints 123 --org acme --state active --json

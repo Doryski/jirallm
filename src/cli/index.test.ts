@@ -26,6 +26,7 @@ const runComponentsMock = vi.fn();
 const runFieldsMock = vi.fn();
 const runLinkTypesMock = vi.fn();
 const runMeMock = vi.fn();
+const runUsersMock = vi.fn();
 const runFetchMock = vi.fn();
 const runCreateMock = vi.fn();
 const runEditMock = vi.fn();
@@ -72,6 +73,7 @@ vi.mock('./commands/components.js', () => ({ runComponents: (...a: unknown[]) =>
 vi.mock('./commands/fields.js', () => ({ runFields: (...a: unknown[]) => runFieldsMock(...a) }));
 vi.mock('./commands/linktypes.js', () => ({ runLinkTypes: (...a: unknown[]) => runLinkTypesMock(...a) }));
 vi.mock('./commands/me.js', () => ({ runMe: (...a: unknown[]) => runMeMock(...a) }));
+vi.mock('./commands/users.js', () => ({ runUsers: (...a: unknown[]) => runUsersMock(...a) }));
 vi.mock('./commands/fetch.js', () => ({ runFetch: (...a: unknown[]) => runFetchMock(...a) }));
 vi.mock('./commands/create.js', () => ({ runCreate: (...a: unknown[]) => runCreateMock(...a) }));
 vi.mock('./commands/edit.js', () => ({ runEdit: (...a: unknown[]) => runEditMock(...a) }));
@@ -518,6 +520,22 @@ describe('list-style command wiring', () => {
   it('me maps -o', async () => {
     await run(['me', '-o', 'acme']);
     expect(firstArg(runMeMock)).toMatchObject({ org: 'acme' });
+  });
+
+  it('users maps the query plus -o/-P/--issue/--limit', async () => {
+    await run(['users', 'jane@example.com', '-o', 'acme', '-P', 'PROJ', '--issue', 'PROJ-1', '--limit', '10']);
+    expect(firstArg(runUsersMock)).toMatchObject({
+      query: 'jane@example.com',
+      org: 'acme',
+      project: 'PROJ',
+      issue: 'PROJ-1',
+      limit: '10',
+    });
+  });
+
+  it('exposes "user" as an alias of "users"', async () => {
+    await run(['user', 'Jane Doe', '-o', 'acme']);
+    expect(firstArg(runUsersMock)).toMatchObject({ query: 'Jane Doe', org: 'acme' });
   });
 });
 
