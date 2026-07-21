@@ -146,10 +146,16 @@ describe('runCreate', () => {
     expect(createIssueMock.mock.calls[0][0].descriptionMarkdown).toBeUndefined();
   });
 
-  it('parses --components into a string array', async () => {
+  it('passes repeatable --components through as a trimmed array', async () => {
     Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
-    await runCreate({ org: 'acme', type: 'Bug', summary: 's', components: 'Web, API' });
+    await runCreate({ org: 'acme', type: 'Bug', summary: 's', components: ['Web', ' API '] });
     expect(createIssueMock.mock.calls[0][0].components).toEqual(['Web', 'API']);
+  });
+
+  it('keeps a component name containing a comma intact (no splitting)', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runCreate({ org: 'acme', type: 'Bug', summary: 's', components: ['Foo, Bar & Baz'] });
+    expect(createIssueMock.mock.calls[0][0].components).toEqual(['Foo, Bar & Baz']);
   });
 
   it('resolves --field via configured custom field defs', async () => {
@@ -166,7 +172,7 @@ describe('runCreate', () => {
       org: 'acme',
       type: 'Bug',
       summary: 's',
-      components: 'Web',
+      components: ['Web'],
       field: ['severity=High'],
       dryRun: true,
       json: true,

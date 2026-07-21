@@ -24,7 +24,7 @@ export type EditOptions = {
   priority?: string;
   parent?: string;
   due?: string;
-  components?: string;
+  components?: string[];
   field?: string[];
   attach?: string[];
   attachImages?: string[];
@@ -79,7 +79,7 @@ export async function runEdit(opts: EditOptions): Promise<void> {
     assigneeDisplayName = resolved.displayName;
   }
   const labels = opts.labels?.split(',').map((s) => s.trim()).filter(Boolean);
-  const components = opts.components?.split(',').map((s) => s.trim()).filter(Boolean);
+  const components = opts.components?.map((s) => s.trim()).filter(Boolean);
   const customFields = parseFieldFlags(opts.field, profile.org?.export?.customFieldDefs);
 
   const fields = {

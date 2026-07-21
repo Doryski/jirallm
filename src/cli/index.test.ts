@@ -147,11 +147,16 @@ describe('create command wiring', () => {
     });
   });
 
-  it('maps -P to projectKey and collects repeatable --field', async () => {
-    await run(['create', '-o', 'acme', '-P', 'PROJ', '-t', 'Bug', '-s', 'y', '-F', 'a=1', '-F', 'b=2']);
+  it('maps -P to projectKey and collects repeatable --field/--components', async () => {
+    await run([
+      'create', '-o', 'acme', '-P', 'PROJ', '-t', 'Bug', '-s', 'y',
+      '-F', 'a=1', '-F', 'b=2',
+      '--components', 'Web', '--components', 'Foo, Bar & Baz',
+    ]);
     expect(firstArg(runCreateMock)).toMatchObject({
       projectKey: 'PROJ',
       field: ['a=1', 'b=2'],
+      components: ['Web', 'Foo, Bar & Baz'],
     });
   });
 

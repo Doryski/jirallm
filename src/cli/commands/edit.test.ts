@@ -208,13 +208,19 @@ describe('runEdit', () => {
     Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
     await runEdit({
       issueKey: 'PROJ-1',
-      components: 'Web,API',
+      components: ['Web', 'API'],
       field: ['reproductionRate=Always'],
     });
     expect(editIssueMock.mock.calls[0][1].components).toEqual(['Web', 'API']);
     expect(editIssueMock.mock.calls[0][1].customFields).toEqual({
       customfield_10051: { value: 'Always' },
     });
+  });
+
+  it('keeps a component name containing a comma intact (no splitting)', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runEdit({ issueKey: 'PROJ-1', components: ['Foo, Bar & Baz'] });
+    expect(editIssueMock.mock.calls[0][1].components).toEqual(['Foo, Bar & Baz']);
   });
 
   it('--attach-images appends embeds to the new description and rewrites its ADF', async () => {
