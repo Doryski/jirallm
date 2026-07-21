@@ -80,6 +80,22 @@ export function parseFieldFlag(token: string, customFieldDefs: CustomFieldDefs =
   throw new Error(`Unknown custom field "${key}".${hint}`);
 }
 
+/**
+ * Which of the given custom-field ids are NOT on the create screen.
+ *
+ * Jira's create endpoint silently drops (and applies field defaults to) custom
+ * fields absent from a project + issue-type create screen, whereas the edit
+ * endpoint's screen includes them — so `create --field` needs this guard where
+ * `edit --field` does not. Query only: the caller decides how to react.
+ */
+export function findFieldsOffCreateScreen(
+  jiraIds: string[],
+  createScreenFieldIds: Iterable<string>
+): string[] {
+  const onScreen = new Set(createScreenFieldIds);
+  return jiraIds.filter((id) => !onScreen.has(id));
+}
+
 /** Reduce a list of `--field` tokens to a merge-ready { jiraId: shapedValue } map. */
 export function parseFieldFlags(
   tokens: string[] | undefined,
