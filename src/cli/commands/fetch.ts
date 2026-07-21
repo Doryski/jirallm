@@ -1,6 +1,7 @@
 import { loadProfile } from '../../lib/config.js';
 import { JiraClient } from '../../lib/jiraClient.js';
 import type { JiraTaskData } from '../../lib/jiraClient.js';
+import { parseFieldsFlag, resolveFieldSet } from '../../lib/exportFields.js';
 import { parseIssueKeyArgs } from '../issueKey.js';
 import { resolveOrg } from '../resolveOrg.js';
 import { printJson, shouldOutputJson } from '../jsonOutput.js';
@@ -16,6 +17,8 @@ export type FetchOptions = {
   withLinks?: boolean;
   withAttachments?: boolean;
   full?: boolean;
+  fields?: string;
+  raw?: boolean;
 };
 
 function buildCommentsSection(data: JiraTaskData): string {
@@ -75,6 +78,11 @@ export async function runFetch(opts: FetchOptions): Promise<void> {
   const profile = await loadProfile({ org, project: parsed.projectKey });
   const client = new JiraClient(profile.config, profile.apiToken);
 
+  if (opts.raw) {
+    printJson(await client.fetchIssueRaw(key));
+    return;
+  }
+
   const withComments = opts.full ? true : opts.withComments ?? false;
   const withHistory = opts.full ? true : opts.withHistory ?? false;
   const withWorklog = opts.full ? true : opts.withWorklog ?? false;
@@ -82,7 +90,13 @@ export async function runFetch(opts: FetchOptions): Promise<void> {
   const withLinks = opts.full ? true : opts.withLinks ?? false;
   const withAttachments = opts.full ? true : opts.withAttachments ?? false;
 
+  const customFieldDefs = profile.org.export?.customFieldDefs ?? {};
+  const fieldSelector = opts.fields ? parseFieldsFlag(opts.fields) : undefined;
+  const resolved = resolveFieldSet(fieldSelector, customFieldDefs);
+
   const data = await client.fetchIssueDetails(key, {
+    jiraFieldIds: resolved.jiraFieldIds,
+    customFieldDefs,
     includeComments: withComments,
     includeChangelog: withHistory,
     fullChangelog: withHistory,

@@ -1015,6 +1015,11 @@ program
   .option('--with-links', 'Include issue links')
   .option('--with-attachments', 'List attachment metadata (does not download)')
   .option('--full', 'Include everything (comments, history, worklog, subtasks, links, attachments)')
+  .option(
+    '--fields <list>',
+    'Field set to include: preset (all|default|minimal), +add/-drop, or a bare comma list'
+  )
+  .option('--raw', 'Output the complete, untransformed Jira field object (all fields; implies JSON)')
   .action(async (issueKey: string, opts: Omit<import('./commands/fetch.js').FetchOptions, 'issueKey'>) => {
     try { await runFetch({ issueKey, ...opts }); } catch (err) { exitOnError(err); }
   })
@@ -1024,11 +1029,19 @@ program
 For the full export bundle (attachments, video frames, on-disk folder),
 use the default \`jirallm <key>\` command instead.
 
+By default \`fetch\` returns the "default" field preset (components, labels,
+priority, assignee, ...) plus any custom fields configured for the org. Use
+--fields to widen or narrow the set, or --raw to dump the untouched Jira
+field object (every field, including unconfigured custom fields) — handy for
+verifying what actually landed after a create/edit.
+
 Examples:
   $ jirallm fetch PROJ-123 --json
   $ jirallm fetch acme/PROJ-123
   $ jirallm fetch PROJ-123 --with-comments --with-history
   $ jirallm fetch PROJ-123 --full
+  $ jirallm fetch PROJ-123 --fields all --json
+  $ jirallm fetch PROJ-123 --raw | jq '.fields.labels'
   $ jirallm fetch PROJ-123 --json | jq .status
 `
   );

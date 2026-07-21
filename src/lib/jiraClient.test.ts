@@ -1090,3 +1090,29 @@ describe('JiraClient.fetchIssueWorklogs', () => {
     ]);
   });
 });
+
+describe('JiraClient.fetchIssueRaw', () => {
+  it('requests all fields with names expansion and returns the raw object', async () => {
+    const raw = {
+      key: 'PROJ-1',
+      fields: { labels: ['x'], components: [{ name: 'API' }], customfield_10050: { value: 'A' } },
+      names: { customfield_10050: 'Team' },
+    };
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => raw,
+    })) as unknown as typeof fetch;
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new JiraClient(FAKE_CONFIG, 'token');
+    const result = await client.fetchIssueRaw('PROJ-1');
+
+    expect(result).toEqual(raw);
+    const url = (vi.mocked(fetchMock).mock.calls[0][0] as string) ?? '';
+    expect(url).toContain('/issue/PROJ-1');
+    expect(url).toContain('fields=*all');
+    expect(url).toContain('expand=names');
+  });
+});

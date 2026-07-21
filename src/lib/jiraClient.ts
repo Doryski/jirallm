@@ -267,6 +267,12 @@ export type JiraTaskData = {
   worklogs?: WorklogSummary[];
 };
 
+export type RawIssue = {
+  key: string;
+  fields: Record<string, unknown>;
+  names?: Record<string, string>;
+};
+
 export type FetchIssueDetailsOptions = {
   jiraFieldIds?: string[];
   customFieldDefs?: CustomFieldDefs;
@@ -760,6 +766,10 @@ export class JiraClient {
     if (options.includeWorklog) task.worklogs = await this.fetchIssueWorklogs(issueKey);
 
     return task;
+  }
+
+  async fetchIssueRaw(issueKey: string): Promise<RawIssue> {
+    return this.makeRequest<RawIssue>(`/issue/${issueKey}?fields=*all&expand=names`);
   }
 
   private buildTaskData(
