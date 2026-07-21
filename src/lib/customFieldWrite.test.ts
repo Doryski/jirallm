@@ -93,6 +93,34 @@ describe('parseFieldFlag', () => {
   it('throws on an invalid inline type', () => {
     expect(() => parseFieldFlag('customfield_10099:bogus=x', {})).toThrow(/type/);
   });
+
+  it('shapes an empty value to null (clear) for a friendly name', () => {
+    expect(parseFieldFlag('severity=', DEFS)).toEqual({
+      jiraId: 'customfield_10050',
+      shaped: null,
+    });
+  });
+
+  it('shapes a literal null value to null (clear) for a friendly name', () => {
+    expect(parseFieldFlag('storyPoints=null', DEFS)).toEqual({
+      jiraId: 'customfield_10016',
+      shaped: null,
+    });
+  });
+
+  it('shapes an empty value to null (clear) for a raw customfield id, ignoring type', () => {
+    expect(parseFieldFlag('customfield_10020:number=', {})).toEqual({
+      jiraId: 'customfield_10020',
+      shaped: null,
+    });
+  });
+
+  it('shapes customfield_NNNNN=null to null (clear)', () => {
+    expect(parseFieldFlag('customfield_10099=null', {})).toEqual({
+      jiraId: 'customfield_10099',
+      shaped: null,
+    });
+  });
 });
 
 describe('parseFieldFlags', () => {
@@ -105,6 +133,13 @@ describe('parseFieldFlags', () => {
     expect(parseFieldFlags(['severity=High', 'customfield_10099:select=PROD'], DEFS)).toEqual({
       customfield_10050: { value: 'High' },
       customfield_10099: { value: 'PROD' },
+    });
+  });
+
+  it('carries null clears through into the map', () => {
+    expect(parseFieldFlags(['severity=High', 'customfield_10020:number='], DEFS)).toEqual({
+      customfield_10050: { value: 'High' },
+      customfield_10020: null,
     });
   });
 });

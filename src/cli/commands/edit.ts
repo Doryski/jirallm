@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { loadProfile } from '../../lib/config.js';
 import { JiraClient } from '../../lib/jiraClient.js';
 import { parseFieldFlags } from '../../lib/customFieldWrite.js';
+import { withResolvedSprint } from '../../lib/sprintWrite.js';
 import { parseIssueKey } from '../issueKey.js';
 import { resolveOrg } from '../resolveOrg.js';
 import { resolveAccountId } from '../resolveUser.js';
@@ -27,6 +28,8 @@ export type EditOptions = {
   due?: string;
   components?: string[];
   field?: string[];
+  sprint?: string;
+  board?: string;
   attach?: string[];
   attachImages?: string[];
   imageLayout?: string;
@@ -81,7 +84,13 @@ export async function runEdit(opts: EditOptions): Promise<void> {
   }
   const labels = opts.labels?.split(',').map((s) => s.trim()).filter(Boolean);
   const components = opts.components?.map((s) => s.trim()).filter(Boolean);
-  const customFields = parseFieldFlags(opts.field, profile.org?.export?.customFieldDefs);
+  const customFieldDefs = profile.org?.export?.customFieldDefs;
+  const customFields = await withResolvedSprint(
+    client,
+    parseFieldFlags(opts.field, customFieldDefs),
+    opts.sprint,
+    { projectKey: parsed.projectKey, board: opts.board, customFieldDefs }
+  );
 
   const fields = {
     summary: opts.summary,

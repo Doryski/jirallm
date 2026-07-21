@@ -23,6 +23,10 @@ const uploadAttachmentMock = vi.fn();
 const getIssueDescriptionAdfMock = vi.fn();
 const updateIssueDescriptionAdfMock = vi.fn();
 const getCreateFieldsMock = vi.fn();
+const detectSprintFieldIdMock = vi.fn();
+const listBoardsMock = vi.fn();
+const listSprintsMock = vi.fn();
+const findBoardByNameMock = vi.fn();
 vi.mock('../../lib/jiraClient.js', () => ({
   JiraClient: class {
     createIssue = createIssueMock;
@@ -31,6 +35,10 @@ vi.mock('../../lib/jiraClient.js', () => ({
     getIssueDescriptionAdf = getIssueDescriptionAdfMock;
     updateIssueDescriptionAdf = updateIssueDescriptionAdfMock;
     getCreateFields = getCreateFieldsMock;
+    detectSprintFieldId = detectSprintFieldIdMock;
+    listBoards = listBoardsMock;
+    listSprints = listSprintsMock;
+    findBoardByName = findBoardByNameMock;
   },
 }));
 
@@ -70,7 +78,25 @@ beforeEach(async () => {
   getCreateFieldsMock.mockReset();
   getCreateFieldsMock.mockResolvedValue([
     { fieldId: 'customfield_10050', name: 'Severity', required: false },
+    { fieldId: 'customfield_10020', name: 'Sprint', required: false },
   ]);
+  detectSprintFieldIdMock.mockReset();
+  detectSprintFieldIdMock.mockResolvedValue('customfield_10020');
+  listBoardsMock.mockReset();
+  listBoardsMock.mockResolvedValue({
+    values: [{ id: 1, name: 'Scrum', type: 'scrum' }],
+    startAt: 0,
+    maxResults: 50,
+    isLast: true,
+  });
+  listSprintsMock.mockReset();
+  listSprintsMock.mockResolvedValue({
+    values: [{ id: 77, name: 'Sprint 77', state: 'active', self: '' }],
+    startAt: 0,
+    maxResults: 50,
+    isLast: true,
+  });
+  findBoardByNameMock.mockReset();
   loadOrgProfileMock.mockReset();
   loadOrgProfileMock.mockImplementation(async () => singleProjectProfile());
   resolveAccountIdMock.mockReset();
@@ -175,6 +201,35 @@ describe('runCreate', () => {
     await runCreate({ org: 'acme', type: 'Bug', summary: 's', field: ['severity=High'] });
     expect(createIssueMock.mock.calls[0][0].customFields).toEqual({
       customfield_10050: { value: 'High' },
+    });
+  });
+
+  it('writes --sprint <id> to the detected sprint field', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runCreate({ org: 'acme', type: 'Story', summary: 's', sprint: '42' });
+    expect(createIssueMock.mock.calls[0][0].customFields).toEqual({ customfield_10020: 42 });
+    expect(listBoardsMock).not.toHaveBeenCalled();
+  });
+
+  it('resolves --sprint active via the single scrum board', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runCreate({ org: 'acme', type: 'Story', summary: 's', sprint: 'active' });
+    expect(createIssueMock.mock.calls[0][0].customFields).toEqual({ customfield_10020: 77 });
+    expect(listSprintsMock).toHaveBeenCalledWith(1, { state: 'active' });
+  });
+
+  it('merges --sprint alongside --field values', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runCreate({
+      org: 'acme',
+      type: 'Story',
+      summary: 's',
+      field: ['severity=High'],
+      sprint: '42',
+    });
+    expect(createIssueMock.mock.calls[0][0].customFields).toEqual({
+      customfield_10050: { value: 'High' },
+      customfield_10020: 42,
     });
   });
 

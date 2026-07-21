@@ -42,12 +42,18 @@ function isCustomFieldType(value: string): value is CustomFieldType {
 
 export type ParsedField = { jiraId: string; shaped: unknown };
 
+/** An empty (`name=`) or literal-null (`name=null`) value means "clear this field". */
+function isClearValue(value: string): boolean {
+  return value === '' || value === 'null';
+}
+
 /**
  * Resolve a single `--field key=value` token to a Jira field id and its shaped write value.
  * Key resolution:
  *  1. Friendly name configured in customFieldDefs → use its {id, type}.
  *  2. Raw `customfield_NNNNN[:type]` → inline type, or default to `scalar`.
  *  3. Anything else → error listing configured friendly names.
+ * A `key=` (empty) or `key=null` value shapes to `null`, clearing the field regardless of type.
  */
 export function parseFieldFlag(token: string, customFieldDefs: CustomFieldDefs = {}): ParsedField {
   const eq = token.indexOf('=');
@@ -56,10 +62,11 @@ export function parseFieldFlag(token: string, customFieldDefs: CustomFieldDefs =
   }
   const key = token.slice(0, eq).trim();
   const value = token.slice(eq + 1);
+  const clear = isClearValue(value);
 
   const def = customFieldDefs[key];
   if (def) {
-    return { jiraId: def.id, shaped: formatCustomFieldWrite(def.type, value) };
+    return { jiraId: def.id, shaped: clear ? null : formatCustomFieldWrite(def.type, value) };
   }
 
   const [rawId, inlineType] = key.split(':');
@@ -70,7 +77,7 @@ export function parseFieldFlag(token: string, customFieldDefs: CustomFieldDefs =
         `Unknown custom field type "${type}" in "${token}". Expected one of: ${CUSTOM_FIELD_TYPES.join(', ')}.`
       );
     }
-    return { jiraId: rawId, shaped: formatCustomFieldWrite(type, value) };
+    return { jiraId: rawId, shaped: clear ? null : formatCustomFieldWrite(type, value) };
   }
 
   const known = Object.keys(customFieldDefs);
