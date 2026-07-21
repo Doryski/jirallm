@@ -31,3 +31,6 @@ coverage/
 # Local exports / scratch
 exports/
 tmp/
+
+# meta-develop evidence (local, not tracked)
+evidence/

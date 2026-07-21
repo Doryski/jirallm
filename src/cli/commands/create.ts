@@ -19,6 +19,7 @@ export type CreateOptions = {
   summary: string;
   description?: string;
   descriptionFile?: string;
+  noWiki?: boolean;
   assignee?: string;
   labels?: string;
   priority?: string;
@@ -71,6 +72,7 @@ export async function runCreate(opts: CreateOptions): Promise<void> {
     issueType: opts.type,
     summary: opts.summary,
     descriptionMarkdown,
+    noWiki: opts.noWiki,
     assigneeAccountId,
     labels,
     priority: opts.priority,
@@ -123,7 +125,7 @@ export async function runCreate(opts: CreateOptions): Promise<void> {
     false
   );
   if (applied.attachedNames.length > 0) {
-    await client.editIssue(result.key, { descriptionMarkdown: applied.body });
+    await client.editIssue(result.key, { descriptionMarkdown: applied.body, noWiki: opts.noWiki });
     await embedDescriptionImages(client, result.key, applied.images, applied.layout);
   }
 

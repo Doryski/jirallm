@@ -18,6 +18,7 @@ export type EditOptions = {
   summary?: string;
   description?: string;
   descriptionFile?: string;
+  noWiki?: boolean;
   assignee?: string;
   unassign?: boolean;
   labels?: string;
@@ -85,6 +86,7 @@ export async function runEdit(opts: EditOptions): Promise<void> {
   const fields = {
     summary: opts.summary,
     descriptionMarkdown,
+    noWiki: opts.noWiki,
     assigneeAccountId,
     labels,
     priority: opts.priority,

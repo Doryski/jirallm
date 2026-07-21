@@ -1397,6 +1397,7 @@ export class JiraClient {
     issueType: string;
     summary: string;
     descriptionMarkdown?: string;
+    noWiki?: boolean;
     assigneeAccountId?: string;
     labels?: string[];
     priority?: string;
@@ -1410,7 +1411,9 @@ export class JiraClient {
       summary: input.summary,
     };
     if (input.descriptionMarkdown !== undefined) {
-      fields.description = markdownToWiki(input.descriptionMarkdown);
+      fields.description = input.noWiki
+        ? input.descriptionMarkdown
+        : markdownToWiki(input.descriptionMarkdown);
     }
     if (input.assigneeAccountId) fields.assignee = { accountId: input.assigneeAccountId };
     if (input.labels) fields.labels = input.labels;
@@ -1443,6 +1446,7 @@ export class JiraClient {
     input: {
       summary?: string;
       descriptionMarkdown?: string;
+      noWiki?: boolean;
       assigneeAccountId?: string | null;
       labels?: string[];
       priority?: string;
@@ -1455,7 +1459,9 @@ export class JiraClient {
     const fields: Record<string, unknown> = {};
     if (input.summary !== undefined) fields.summary = input.summary;
     if (input.descriptionMarkdown !== undefined) {
-      fields.description = markdownToWiki(input.descriptionMarkdown);
+      fields.description = input.noWiki
+        ? input.descriptionMarkdown
+        : markdownToWiki(input.descriptionMarkdown);
     }
     if (input.assigneeAccountId !== undefined) {
       fields.assignee = input.assigneeAccountId === null

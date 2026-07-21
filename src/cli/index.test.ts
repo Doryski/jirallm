@@ -164,6 +164,16 @@ describe('create command wiring', () => {
     await expect(run(['create', '-s', 'x'])).rejects.toThrow();
     expect(runCreateMock).not.toHaveBeenCalled();
   });
+
+  it('defaults noWiki to false', async () => {
+    await run(['create', '-o', 'acme', '-t', 'Task', '-s', 'x', '-d', 'body']);
+    expect(firstArg(runCreateMock)).toMatchObject({ noWiki: false });
+  });
+
+  it('sets noWiki when --no-wiki is passed', async () => {
+    await run(['create', '-o', 'acme', '-t', 'Task', '-s', 'x', '-d', 'body', '--no-wiki']);
+    expect(firstArg(runCreateMock)).toMatchObject({ noWiki: true });
+  });
 });
 
 describe('edit command wiring', () => {
@@ -174,6 +184,16 @@ describe('edit command wiring', () => {
       summary: 'new title',
       dryRun: true,
     });
+  });
+
+  it('defaults noWiki to false', async () => {
+    await run(['edit', 'PROJ-1', '-d', 'body']);
+    expect(firstArg(runEditMock)).toMatchObject({ issueKey: 'PROJ-1', noWiki: false });
+  });
+
+  it('sets noWiki when --no-wiki is passed', async () => {
+    await run(['edit', 'PROJ-1', '-d', 'body', '--no-wiki']);
+    expect(firstArg(runEditMock)).toMatchObject({ issueKey: 'PROJ-1', noWiki: true });
   });
 });
 

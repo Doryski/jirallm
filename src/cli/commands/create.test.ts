@@ -121,6 +121,12 @@ describe('runCreate', () => {
     expect(createIssueMock.mock.calls[0][0].descriptionMarkdown).toBe('**from file**');
   });
 
+  it('forwards noWiki to createIssue when --no-wiki is set', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runCreate({ org: 'acme', type: 'Task', summary: 's', description: 'h2. Heading', noWiki: true });
+    expect(createIssueMock.mock.calls[0][0].noWiki).toBe(true);
+  });
+
   it('falls back to profile project key when --project not provided', async () => {
     Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
     await runCreate({ org: 'acme', type: 'Task', summary: 's' });
