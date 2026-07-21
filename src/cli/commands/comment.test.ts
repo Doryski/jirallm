@@ -442,4 +442,29 @@ describe('runCommentList', () => {
     expect(parsed.comments[0].snippet.endsWith('…')).toBe(true);
     expect(parsed.comments[0].snippet.length).toBeLessThan(long.length);
   });
+
+  it('--rendered requests renderedBody, includes it per comment, and implies JSON', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    fetchIssueCommentsMock.mockResolvedValue([
+      {
+        id: '1',
+        author: { displayName: 'Alice' },
+        created: '2026-01-01',
+        body: 'hello',
+        renderedBody: '<p>hello</p>',
+      },
+    ]);
+    await runCommentList('PROJ-1', { rendered: true });
+    expect(fetchIssueCommentsMock).toHaveBeenCalledWith('PROJ-1', { rendered: true });
+    const parsed = JSON.parse(writes.join(''));
+    expect(parsed.comments[0]).toMatchObject({ id: '1', renderedBody: '<p>hello</p>' });
+  });
+
+  it('omits renderedBody when --rendered is not passed', async () => {
+    fetchIssueCommentsMock.mockResolvedValue(sample);
+    await runCommentList('PROJ-1', { json: true });
+    expect(fetchIssueCommentsMock).toHaveBeenCalledWith('PROJ-1', { rendered: undefined });
+    const parsed = JSON.parse(writes.join(''));
+    expect(parsed.comments[0]).not.toHaveProperty('renderedBody');
+  });
 });

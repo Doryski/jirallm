@@ -217,6 +217,8 @@ jirallm search 'assignee = currentUser() AND statusCategory != Done' --org acme 
 jirallm fetch PROJ-123 --json
 jirallm fetch PROJ-123 --fields all --json      # widen the field set (components, labels, custom fields, ...)
 jirallm fetch PROJ-123 --raw | jq '.fields.labels'  # complete, untransformed Jira field object
+jirallm fetch PROJ-123 --rendered | jq -r '.renderedFields.description'  # Jira-rendered HTML
+jirallm fetch PROJ-123 --expand changelog,renderedFields  # pass arbitrary Jira expand params
 jirallm transition PROJ-123 --list --json
 ```
 
@@ -225,6 +227,7 @@ Mutations (all accept `--dry-run`):
 ```bash
 jirallm comment PROJ-123 --file ./summary.md
 jirallm comment:ls PROJ-123 --json
+jirallm comment:ls PROJ-123 --rendered | jq -r '.comments[].renderedBody'  # Jira-rendered HTML per comment
 jirallm comment:edit PROJ-123 26215 --file ./fixed.md --attach after-proof.png
 jirallm comment PROJ-123 --file ./summary.md --attach-images shot.png:"New config field"
 jirallm comment:rm PROJ-123 26215 --yes

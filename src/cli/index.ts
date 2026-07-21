@@ -680,9 +680,10 @@ program
   .description('List comments on a Jira issue.')
   .option('-o, --org <name>', 'Organization name override')
   .option('--json', 'Output JSON instead of human-readable')
-  .action(async (issueKey: string, opts: { org?: string; json?: boolean }) => {
+  .option('--rendered', 'Include renderedBody (Jira-rendered HTML) per comment; implies JSON')
+  .action(async (issueKey: string, opts: { org?: string; json?: boolean; rendered?: boolean }) => {
     try {
-      await runCommentList(issueKey, { org: opts.org, json: opts.json });
+      await runCommentList(issueKey, { org: opts.org, json: opts.json, rendered: opts.rendered });
     } catch (err) {
       exitOnError(err);
     }
@@ -690,9 +691,13 @@ program
   .addHelpText(
     'after',
     `
+--rendered includes each comment's Jira-rendered HTML (renderedBody), so you can
+confirm a wiki-markup comment rendered correctly. It implies JSON output.
+
 Examples:
   $ jirallm comment:ls PROJ-123
   $ jirallm comment:ls acme/PROJ-123 --json
+  $ jirallm comment:ls PROJ-123 --rendered | jq -r '.comments[].renderedBody'
 `
   );
 
@@ -1020,6 +1025,8 @@ program
     'Field set to include: preset (all|default|minimal), +add/-drop, or a bare comma list'
   )
   .option('--raw', 'Output the complete, untransformed Jira field object (all fields; implies JSON)')
+  .option('--rendered', 'Include renderedFields (Jira-rendered HTML for description and other fields; implies raw JSON)')
+  .option('--expand <list>', 'Comma-separated Jira expand params to pass through on the raw object (implies raw JSON)')
   .action(async (issueKey: string, opts: Omit<import('./commands/fetch.js').FetchOptions, 'issueKey'>) => {
     try { await runFetch({ issueKey, ...opts }); } catch (err) { exitOnError(err); }
   })
@@ -1035,6 +1042,11 @@ priority, assignee, ...) plus any custom fields configured for the org. Use
 field object (every field, including unconfigured custom fields) — handy for
 verifying what actually landed after a create/edit.
 
+--rendered adds a renderedFields object (Jira-rendered HTML) alongside the raw
+fields, so you can confirm a wiki-markup body rendered correctly. --expand lets
+you pass arbitrary Jira expand params through on the raw object. Both imply raw
+JSON output.
+
 Examples:
   $ jirallm fetch PROJ-123 --json
   $ jirallm fetch acme/PROJ-123
@@ -1042,6 +1054,8 @@ Examples:
   $ jirallm fetch PROJ-123 --full
   $ jirallm fetch PROJ-123 --fields all --json
   $ jirallm fetch PROJ-123 --raw | jq '.fields.labels'
+  $ jirallm fetch PROJ-123 --rendered | jq -r '.renderedFields.description'
+  $ jirallm fetch PROJ-123 --expand changelog,renderedFields
   $ jirallm fetch PROJ-123 --json | jq .status
 `
   );

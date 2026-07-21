@@ -65,6 +65,7 @@ export type JiraComment = {
   author: { displayName: string; accountId?: string };
   created: string;
   body: string | JiraADFDocument;
+  renderedBody?: string;
 };
 
 type JiraCommentsResponse = {
@@ -271,6 +272,7 @@ export type RawIssue = {
   key: string;
   fields: Record<string, unknown>;
   names?: Record<string, string>;
+  renderedFields?: Record<string, unknown>;
 };
 
 export type FetchIssueDetailsOptions = {
@@ -768,8 +770,9 @@ export class JiraClient {
     return task;
   }
 
-  async fetchIssueRaw(issueKey: string): Promise<RawIssue> {
-    return this.makeRequest<RawIssue>(`/issue/${issueKey}?fields=*all&expand=names`);
+  async fetchIssueRaw(issueKey: string, expand: string[] = ['names']): Promise<RawIssue> {
+    const params = new URLSearchParams({ fields: '*all', expand: expand.join(',') });
+    return this.makeRequest<RawIssue>(`/issue/${issueKey}?${params.toString()}`);
   }
 
   private buildTaskData(
@@ -907,15 +910,23 @@ export class JiraClient {
     return data;
   }
 
-  async fetchIssueComments(issueKey: string): Promise<JiraComment[]> {
+  async fetchIssueComments(
+    issueKey: string,
+    opts: { rendered?: boolean } = {}
+  ): Promise<JiraComment[]> {
     const allComments: JiraComment[] = [];
     const maxResults = 100;
     let startAt = 0;
     let total: number;
 
     do {
+      const params = new URLSearchParams({
+        startAt: String(startAt),
+        maxResults: String(maxResults),
+      });
+      if (opts.rendered) params.set('expand', 'renderedBody');
       const response = await this.makeRequest<JiraCommentsResponse>(
-        `/issue/${issueKey}/comment?startAt=${startAt}&maxResults=${maxResults}`
+        `/issue/${issueKey}/comment?${params.toString()}`
       );
       allComments.push(...response.comments);
       total = response.total;

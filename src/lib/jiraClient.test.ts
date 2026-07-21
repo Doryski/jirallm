@@ -916,6 +916,39 @@ describe('JiraClient.fetchIssueComments', () => {
     const client = new JiraClient(FAKE_CONFIG, 'token');
     expect(await client.fetchIssueComments('PROJ-1')).toEqual([]);
   });
+
+  it('expands renderedBody when rendered is requested', async () => {
+    const urls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        urls.push(url);
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => ({
+            comments: [
+              {
+                id: 'c1',
+                author: { displayName: 'A' },
+                created: '2026-01-01',
+                body: 'one',
+                renderedBody: '<p>one</p>',
+              },
+            ],
+            total: 1,
+            startAt: 0,
+            maxResults: 100,
+          }),
+        };
+      })
+    );
+    const client = new JiraClient(FAKE_CONFIG, 'token');
+    const comments = await client.fetchIssueComments('PROJ-1', { rendered: true });
+    expect(comments[0].renderedBody).toBe('<p>one</p>');
+    expect(urls[0]).toContain('expand=renderedBody');
+  });
 });
 
 describe('JiraClient.fetchIssueChangelog', () => {
@@ -1114,5 +1147,22 @@ describe('JiraClient.fetchIssueRaw', () => {
     expect(url).toContain('/issue/PROJ-1');
     expect(url).toContain('fields=*all');
     expect(url).toContain('expand=names');
+  });
+
+  it('joins a custom expand list into the request', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => ({ key: 'PROJ-1', fields: {}, renderedFields: { description: '<p>x</p>' } }),
+    })) as unknown as typeof fetch;
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new JiraClient(FAKE_CONFIG, 'token');
+    const result = await client.fetchIssueRaw('PROJ-1', ['names', 'renderedFields']);
+
+    expect(result.renderedFields).toEqual({ description: '<p>x</p>' });
+    const url = (vi.mocked(fetchMock).mock.calls[0][0] as string) ?? '';
+    expect(decodeURIComponent(url)).toContain('expand=names,renderedFields');
   });
 });
