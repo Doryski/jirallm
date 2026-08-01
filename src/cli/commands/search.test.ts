@@ -1,12 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { loadOrgProfileMock } = vi.hoisted(() => ({
-  loadOrgProfileMock: vi.fn(async () => ({
+const { loadOrgProfileMock } = vi.hoisted(() => {
+  type OrgProfile = {
+    config: { baseUrl: string; userEmail: string };
+    org: {
+      name: string;
+      export?: { customFieldDefs?: Record<string, { id: string; type: string }> };
+    };
+    apiToken: string;
+  };
+  const profile: OrgProfile = {
     config: { baseUrl: 'https://x', userEmail: 'u@x' },
     org: { name: 'acme' },
     apiToken: 'tok',
-  })),
-}));
+  };
+  return { loadOrgProfileMock: vi.fn(async (): Promise<OrgProfile> => profile) };
+});
 vi.mock('../../lib/config.js', () => ({
   loadOrgProfile: loadOrgProfileMock,
 }));
@@ -14,13 +23,98 @@ vi.mock('../../lib/config.js', () => ({
 const searchIssuesMock = vi.fn();
 const detectSprintFieldIdMock = vi.fn(async () => 'customfield_10020');
 const detectStoryPointsFieldIdMock = vi.fn(async () => 'customfield_10030');
+const listFieldsMock = vi.fn();
 vi.mock('../../lib/jiraClient.js', () => ({
   JiraClient: class {
     searchIssues = searchIssuesMock;
     detectSprintFieldId = detectSprintFieldIdMock;
     detectStoryPointsFieldId = detectStoryPointsFieldIdMock;
+    listFields = listFieldsMock;
   },
 }));
+
+const CATALOG = [
+  {
+    id: 'summary',
+    key: 'summary',
+    name: 'Summary',
+    custom: false,
+    orderable: true,
+    navigable: true,
+    searchable: true,
+    clauseNames: ['summary'],
+    schema: { type: 'string', system: 'summary' },
+  },
+  {
+    id: 'status',
+    key: 'status',
+    name: 'Status',
+    custom: false,
+    orderable: false,
+    navigable: true,
+    searchable: true,
+    clauseNames: ['status'],
+    schema: { type: 'status', system: 'status' },
+  },
+  {
+    id: 'environment',
+    key: 'environment',
+    name: 'Environment',
+    custom: false,
+    orderable: true,
+    navigable: true,
+    searchable: true,
+    clauseNames: ['environment'],
+    schema: { type: 'string', system: 'environment' },
+  },
+  {
+    id: 'customfield_10050',
+    key: 'customfield_10050',
+    name: 'Team',
+    untranslatedName: 'Team',
+    custom: true,
+    orderable: true,
+    navigable: true,
+    searchable: true,
+    clauseNames: ['cf[10050]', 'Team'],
+    schema: {
+      type: 'option',
+      custom: 'com.atlassian.jira.plugin.system.customfieldtypes:select',
+      customId: 10050,
+    },
+  },
+  {
+    id: 'customfield_10020',
+    key: 'customfield_10020',
+    name: 'Sprint',
+    custom: true,
+    orderable: true,
+    navigable: true,
+    searchable: true,
+    clauseNames: ['cf[10020]', 'Sprint'],
+    schema: {
+      type: 'array',
+      items: 'json',
+      custom: 'com.pyxis.greenhopper.jira:gh-sprint',
+      customId: 10020,
+    },
+  },
+  {
+    id: 'customfield_10016',
+    key: 'customfield_10016',
+    name: 'Story Points',
+    custom: true,
+    orderable: true,
+    navigable: true,
+    searchable: true,
+    clauseNames: ['cf[10016]', 'Story Points'],
+    schema: {
+      type: 'number',
+      custom: 'com.atlassian.jira.plugin.system.customfieldtypes:float',
+      customId: 10016,
+    },
+  },
+] as const;
 
 import { runSearch } from './search.js';
 import {
@@ -88,6 +182,8 @@ beforeEach(() => {
   searchIssuesMock.mockReset();
   detectSprintFieldIdMock.mockClear();
   detectStoryPointsFieldIdMock.mockClear();
+  listFieldsMock.mockReset();
+  listFieldsMock.mockResolvedValue([...CATALOG]);
 });
 
 afterEach(() => {
@@ -420,6 +516,204 @@ describe('runSearch', () => {
     const [first, second] = logs.filter((line) => line.includes('PROJ-'));
     expect(first).toContain('parent: PROJ-9');
     expect(second).not.toContain('parent:');
+  });
+
+  it('never asks Jira for the field catalog when no --fields is given (issue #23 follow-up)', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    await runJsonSearch({ jql: 'x', json: true });
+    expect(listFieldsMock).not.toHaveBeenCalled();
+  });
+
+  it('never asks Jira for the field catalog when every name is known (issue #23 follow-up)', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    await runJsonSearch({ jql: 'x', json: true, fields: 'status,assignee,+labels,-parent' });
+    expect(listFieldsMock).not.toHaveBeenCalled();
+    expect(searchIssuesMock).toHaveBeenCalled();
+  });
+
+  it('accepts a raw custom field id that the catalog knows (issue #23 follow-up)', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    const parsed = await runJsonSearch({ jql: 'x', json: true, fields: 'customfield_10050' });
+    expect(listFieldsMock).toHaveBeenCalledTimes(1);
+    expect(searchIssuesMock.mock.calls[0][1].fields).toContain('customfield_10050');
+    expect(parsed.issues[0].customfield_10050).toEqual({ value: 'Platform' });
+  });
+
+  it('accepts a raw system field id the catalog knows (issue #23 follow-up)', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    const parsed = await runJsonSearch({ jql: 'x', json: true, fields: 'environment' });
+    expect(searchIssuesMock.mock.calls[0][1].fields).toContain('environment');
+    expect(parsed.issues[0].environment).toBe('staging');
+  });
+
+  it('rejects a display name and names the id to use instead (issue #23 follow-up)', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    await expect(runSearch({ jql: 'x', json: true, fields: 'Team' })).rejects.toThrow(
+      /Unknown field "Team"\..*raw Jira field IDs, not display names.*"Team" → "customfield_10050"/s
+    );
+    expect(searchIssuesMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects a mis-cased id rather than passing it through empty (issue #23 follow-up)', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    await expect(runSearch({ jql: 'x', json: true, fields: 'Environment' })).rejects.toThrow(
+      /"Environment" → "environment"/
+    );
+  });
+
+  it('reports name-only and unknown tokens together (issue #23 follow-up)', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    const err = await runSearch({ jql: 'x', json: true, fields: 'Team,issuelinkz' }).catch(
+      (e: Error) => e
+    );
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain('"Team" → "customfield_10050"');
+    expect((err as Error).message).toContain('Unknown field "issuelinkz"');
+    expect((err as Error).message).toContain('Did you mean "issueLinks"?');
+  });
+
+  it('never suggests a display name as a fix for a typo (issue #23 follow-up)', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    const err = await runSearch({ jql: 'x', json: true, fields: 'enviroment' }).catch(
+      (e: Error) => e
+    );
+    expect((err as Error).message).toContain('Did you mean "environment"?');
+    expect((err as Error).message).not.toContain('"Environment"');
+  });
+
+  it('does not reject an exclude token, which never reaches Jira (issue #23 follow-up)', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    await runJsonSearch({ jql: 'x', json: true, fields: 'default,-customfield_99999' });
+    expect(listFieldsMock).not.toHaveBeenCalled();
+    expect(searchIssuesMock.mock.calls[0][1].fields).not.toContain('customfield_99999');
+  });
+
+  it('passes the *all / *navigable wildcards through unchecked (issue #23 follow-up)', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    await runJsonSearch({ jql: 'x', json: true, fields: '*all' });
+    expect(listFieldsMock).not.toHaveBeenCalled();
+    expect(searchIssuesMock.mock.calls[0][1].fields).toContain('*all');
+
+    await runJsonSearch({ jql: 'x', json: true, fields: '+*navigable' });
+    expect(searchIssuesMock.mock.calls[1][1].fields).toContain('*navigable');
+  });
+
+  it('asks for the field catalog exactly once per search (issue #23 follow-up)', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    await runJsonSearch({ jql: 'x', json: true, fields: 'sprint,customfield_10050' });
+    expect(listFieldsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('validates an additive raw field id the same way (issue #23 follow-up)', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    await runJsonSearch({ jql: 'x', json: true, fields: '+customfield_10050' });
+    expect(listFieldsMock).toHaveBeenCalledTimes(1);
+    expect(searchIssuesMock.mock.calls[0][1].fields).toContain('customfield_10050');
+
+    await expect(
+      runSearch({ jql: 'x', json: true, fields: '+issuelinkz' })
+    ).rejects.toThrow(/issuelinkz/);
+  });
+
+  it('rejects a typo that matches neither jirallm nor the Jira catalog (issue #23 follow-up)', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    await expect(runSearch({ jql: 'x', json: true, fields: 'issuelinkz' })).rejects.toThrow(
+      /Unknown field "issuelinkz"\..*Did you mean "issueLinks"\?.*jirallm fields/s
+    );
+    expect(searchIssuesMock).not.toHaveBeenCalled();
+  });
+
+  it('steers a capitalised built-in to its friendly name, not to a raw id (issue #23 follow-up)', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    const err = await runSearch({ jql: 'x', json: true, fields: 'Sprint' }).catch((e: Error) => e);
+    expect((err as Error).message).toContain('Did you mean "sprint"?');
+    expect((err as Error).message).not.toContain('customfield_10020');
+  });
+
+  it('steers a capitalised configured custom-field key to that key (issue #23 follow-up)', async () => {
+    loadOrgProfileMock.mockResolvedValueOnce({
+      config: { baseUrl: 'https://x', userEmail: 'u@x' },
+      org: { name: 'acme', export: { customFieldDefs: { team: { id: 'customfield_10050', type: 'select' } } } },
+      apiToken: 'tok',
+    });
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    const err = await runSearch({ jql: 'x', json: true, fields: 'Team' }).catch((e: Error) => e);
+    expect((err as Error).message).toContain('Did you mean "team"?');
+    expect((err as Error).message).not.toContain('customfield_10050');
+  });
+
+  it('accepts a custom-field key that only the org config defines, with no catalog call (issue #23 follow-up)', async () => {
+    loadOrgProfileMock.mockResolvedValueOnce({
+      config: { baseUrl: 'https://x', userEmail: 'u@x' },
+      org: { name: 'acme', export: { customFieldDefs: { severity: { id: 'customfield_77777', type: 'select' } } } },
+      apiToken: 'tok',
+    });
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    await runJsonSearch({ jql: 'x', json: true, fields: 'severity' });
+    expect(listFieldsMock).not.toHaveBeenCalled();
+    expect(searchIssuesMock.mock.calls[0][1].fields).toContain('customfield_77777');
+  });
+
+  it('lists every id when a display name is ambiguous (issue #23 follow-up)', async () => {
+    listFieldsMock.mockResolvedValue([
+      { id: 'customfield_10050', name: 'Team', custom: true },
+      { id: 'customfield_20050', name: 'Team', custom: true },
+    ]);
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    const err = await runSearch({ jql: 'x', json: true, fields: 'Team' }).catch((e: Error) => e);
+    expect((err as Error).message).toContain('"customfield_10050", "customfield_20050"');
+    expect((err as Error).message).toContain('2 fields share that name');
+  });
+
+  it('reports several aliased and several unknown tokens in one error (issue #23 follow-up)', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    const err = await runSearch({
+      jql: 'x',
+      json: true,
+      fields: 'Team,Story Points,issuelinkz,labelz',
+    }).catch((e: Error) => e);
+    const message = (err as Error).message;
+    expect(message).toContain('"Team" → "customfield_10050"');
+    expect(message).toContain('"Story Points" → "customfield_10016"');
+    expect(message).toContain('Unknown fields "issuelinkz", "labelz"');
+    expect(message).toContain('"issuelinkz" → "issueLinks"');
+    expect(message).toContain('"labelz" → "labels"');
+  });
+
+  it('validates bare and unknown "*" tokens instead of waving them through (issue #23 follow-up)', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    await expect(runSearch({ jql: 'x', json: true, fields: '*' })).rejects.toThrow(
+      /Unknown field "\*"/
+    );
+    await expect(runSearch({ jql: 'x', json: true, fields: '*foo' })).rejects.toThrow(
+      /Unknown field "\*foo"/
+    );
+    expect(searchIssuesMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a non-array body', { values: [] }],
+    ['a null entry', [null]],
+    ['an entry with no id', [{ name: 'Team', custom: true }]],
+    ['an empty catalog', []],
+  ])('warns and still searches on %s (issue #23 follow-up)', async (_label, response) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    listFieldsMock.mockResolvedValue(response);
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    await runJsonSearch({ jql: 'x', json: true, fields: 'customfield_10050' });
+    expect(warn.mock.calls[0][0]).toContain('Warning: could not verify --fields');
+    expect(searchIssuesMock).toHaveBeenCalled();
+    expect(searchIssuesMock.mock.calls[0][1].fields).toContain('customfield_10050');
+  });
+
+  it('warns and still searches when the field catalog is unreachable (issue #23 follow-up)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    listFieldsMock.mockRejectedValue(new Error('403 Forbidden'));
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    await runJsonSearch({ jql: 'x', json: true, fields: 'issuelinkz' });
+    expect(warn.mock.calls[0][0]).toContain('Warning: could not verify --fields');
+    expect(warn.mock.calls[0][0]).toContain('403 Forbidden');
+    expect(searchIssuesMock).toHaveBeenCalled();
   });
 
   it('prints cursor hint when more results available + TTY', async () => {

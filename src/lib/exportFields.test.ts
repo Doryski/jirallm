@@ -9,6 +9,8 @@ import {
   deriveSelectorMode,
   findUnknownFieldNames,
   formatUnknownFieldNamesError,
+  formatUnresolvedFieldNamesError,
+  closestFieldName,
   hasSprintRequested,
   hasStoryPointsRequested,
   normalizeFieldName,
@@ -550,6 +552,78 @@ describe('formatUnknownFieldNamesError (issue #23)', () => {
 
   it('omits the preset hint for a plain misspelling (issue #23)', () => {
     expect(formatUnknownFieldNamesError(['issuelinkz'])).not.toContain('Preset names');
+  });
+});
+
+describe('closestFieldName (issue #23 follow-up)', () => {
+  it('matches a one-character typo case-insensitively', () => {
+    expect(closestFieldName('issuelinkz', [...BUILT_IN_FIELDS])).toBe('issueLinks');
+  });
+
+  it('matches whatever candidates the caller supplies, case-insensitively — restricting those candidates to ids is the call site\'s job', () => {
+    expect(closestFieldName('enviroment', ['Environment', 'Summary'])).toBe('Environment');
+  });
+
+  it('returns undefined when nothing is close enough', () => {
+    expect(closestFieldName('totallybogusfield', [...BUILT_IN_FIELDS])).toBeUndefined();
+  });
+
+  it('gives up on an absurdly long token instead of scanning the catalog', () => {
+    const catalog = Array.from({ length: 6000 }, (_, i) => `customfield_${10000 + i}`);
+    const started = Date.now();
+    expect(closestFieldName('x'.repeat(10_000), catalog)).toBeUndefined();
+    expect(Date.now() - started).toBeLessThan(200);
+  });
+
+  it('prefers the nearest candidate', () => {
+    expect(closestFieldName('labelz', ['labels', 'labelzzz'])).toBe('labels');
+  });
+});
+
+describe('formatUnresolvedFieldNamesError (issue #23 follow-up)', () => {
+  it('quotes the name, explains both vocabularies and points at jirallm fields', () => {
+    const msg = formatUnresolvedFieldNamesError(['issuelinkz']);
+    expect(msg).toContain('Unknown field "issuelinkz".');
+    expect(msg).toContain('neither a jirallm field name nor any field in this Jira instance');
+    expect(msg).toContain('Did you mean "issueLinks"?');
+    expect(msg).toContain('jirallm fields');
+    expect(msg).not.toContain('Valid fields:');
+  });
+
+  it('suggests a catalog id — never a display name — for a typo of a raw Jira field', () => {
+    const msg = formatUnresolvedFieldNamesError(['enviroment'], ['environment', 'summary']);
+    expect(msg).toContain('Did you mean "environment"?');
+  });
+
+  it('points at the command that actually lists ids', () => {
+    const msg = formatUnresolvedFieldNamesError(['issuelinkz']);
+    expect(msg).toContain("Run `jirallm fields` to list this instance's custom fields and their ids");
+    expect(msg).not.toContain('every field');
+  });
+
+  it('pairs each name with its suggestion when several are unresolved', () => {
+    const msg = formatUnresolvedFieldNamesError(['issuelinkz', 'labelz'], []);
+    expect(msg).toContain('Unknown fields "issuelinkz", "labelz".');
+    expect(msg).toContain('They match neither');
+    expect(msg).toContain('"issuelinkz" → "issueLinks"');
+    expect(msg).toContain('"labelz" → "labels"');
+  });
+
+  it('omits the suggestion entirely when nothing is close', () => {
+    const msg = formatUnresolvedFieldNamesError(['totallybogusfield']);
+    expect(msg).not.toContain('Did you mean');
+  });
+
+  it('caps the number of suggestions', () => {
+    const msg = formatUnresolvedFieldNamesError(['labelz', 'prioritz', 'creatorr', 'reporterr']);
+    expect(msg.match(/→/g)).toHaveLength(3);
+  });
+
+  it('suggests a configured custom field key', () => {
+    const defs: CustomFieldDefs = { severity: { id: 'customfield_99999', type: 'select' } };
+    expect(formatUnresolvedFieldNamesError(['severty'], [], defs)).toContain(
+      'Did you mean "severity"?'
+    );
   });
 });
 

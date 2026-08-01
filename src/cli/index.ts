@@ -880,7 +880,7 @@ program
   .option('--next-page-token <token>', 'Alias for --cursor')
   .option(
     '--fields <list>',
-    'Field set to include: preset (all|default|minimal), +add/-drop, or a bare comma list. Unlike fetch/export, search also accepts unmapped raw Jira field IDs (e.g. customfield_10050, environment)'
+    'Field set to include: preset (all|default|minimal), +add/-drop, or a bare comma list. Unlike fetch/export, search also accepts unmapped raw Jira field IDs (e.g. customfield_10050, environment) — IDs only, not display names; an unrecognised name is verified against this instance once and rejected if no such field exists'
   )
   .option('--json', 'Output JSON instead of human-readable')
   .action(async (jql: string, opts: Omit<import('./commands/search.js').SearchOptions, 'jql'>) => {
@@ -902,6 +902,14 @@ only command that also passes unmapped raw Jira field IDs straight through
 (customfield_10050, environment); \`fetch\` and \`export\` reject names outside
 their vocabulary. Without it, rows stay
 key/summary/status/assignee/issueType/parent.
+
+A name outside jirallm's vocabulary is checked once against this instance's
+field catalog (one extra GET /rest/api/3/field) before the search runs, and the
+command fails if no such field exists — so a typo reports itself instead of
+returning an empty column. Only raw field IDs are accepted, never display names:
+pass "customfield_10050", not "Team". Run \`jirallm fields\` for custom-field
+IDs. The \`*all\`/\`*navigable\` wildcards are passed through unchecked, and a
+selector made only of known names costs no extra request.
 
 \`parent\` is in the default set, with the same normalised
 {key, title, status, issueType, priority} shape \`fetch\` returns (omitted when

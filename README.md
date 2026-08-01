@@ -243,7 +243,8 @@ jirallm sprints 123 --org acme --state active --json
 jirallm issuetypes --org acme --project PROJ --json
 jirallm linktypes --org acme --json
 jirallm search 'assignee = currentUser() AND statusCategory != Done' --org acme --limit 25 --json
-jirallm search 'project = PROJ' --org acme --fields default,+labels --json  # --fields shapes the JSON rows too (same vocabulary as `fetch`; `search` alone also accepts unmapped raw Jira field IDs such as customfield_10050)
+jirallm search 'project = PROJ' --org acme --fields default,+labels --json  # --fields shapes the JSON rows too (same vocabulary as `fetch`; `search` alone also accepts unmapped raw Jira field **IDs** such as customfield_10050 or environment — not display names like "Team")
+jirallm search 'project = PROJ' --org acme --fields customfield_10050 --json  # an ID outside jirallm's vocabulary is checked against /rest/api/3/field once and rejected if this instance has no such field (typos fail loudly instead of returning an empty column); run `jirallm fields` for custom-field IDs
 jirallm search 'parent in (PROJ-100, PROJ-200)' --org acme --json  # rows carry `parent` ({key, title, status, issueType, priority} — the last two omitted when Jira has none) by default; drop it with `--fields -parent`
 jirallm fetch PROJ-123 --json
 jirallm fetch PROJ-123 --fields all --json      # widen the field set (components, labels, custom fields, ...)

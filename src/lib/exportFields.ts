@@ -279,6 +279,70 @@ export function formatUnknownFieldNamesError(
   )}.${custom}${presetHint}`;
 }
 
+const MAX_SUGGESTIONS = 3;
+const MAX_SUGGESTION_LENGTH = 64;
+
+function editDistance(a: string, b: string): number {
+  let previous = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i += 1) {
+    const row = [i];
+    for (let j = 1; j <= b.length; j += 1) {
+      const substitution = previous[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1);
+      row[j] = Math.min(previous[j] + 1, row[j - 1] + 1, substitution);
+    }
+    previous = row;
+  }
+  return previous[b.length];
+}
+
+export function closestFieldName(
+  name: string,
+  candidates: readonly string[]
+): string | undefined {
+  const target = name.toLowerCase();
+  if (target.length > MAX_SUGGESTION_LENGTH) return undefined;
+  const tolerance = target.length <= 4 ? 1 : 2;
+  let best: { candidate: string; distance: number } | undefined;
+  for (const candidate of candidates) {
+    if (Math.abs(candidate.length - target.length) > tolerance) continue;
+    const distance = editDistance(target, candidate.toLowerCase());
+    if (distance > tolerance) continue;
+    if (best && best.distance <= distance) continue;
+    best = { candidate, distance };
+  }
+  return best?.candidate;
+}
+
+function formatSuggestionHint(pairs: readonly (readonly [string, string])[], single: boolean) {
+  if (pairs.length === 0) return '';
+  if (single) return ` Did you mean "${pairs[0][1]}"?`;
+  const listed = pairs.map(([from, to]) => `"${from}" → "${to}"`).join(', ');
+  return ` Did you mean: ${listed}?`;
+}
+
+export function formatUnresolvedFieldNamesError(
+  unresolvedNames: readonly string[],
+  catalogNames: readonly string[] = [],
+  customFieldDefs: CustomFieldDefs = {}
+): string {
+  const label = unresolvedNames.length > 1 ? 'fields' : 'field';
+  const subject = unresolvedNames.length > 1 ? 'They match' : 'It matches';
+  const quoted = unresolvedNames.map((name) => `"${name}"`).join(', ');
+  const candidates = [
+    ...new Set([...BUILT_IN_FIELDS, ...Object.keys(customFieldDefs), ...catalogNames]),
+  ];
+  const pairs = unresolvedNames
+    .map((name) => [name, closestFieldName(name, candidates)] as const)
+    .filter((pair): pair is readonly [string, string] => Boolean(pair[1]))
+    .slice(0, MAX_SUGGESTIONS);
+  const hint = formatSuggestionHint(pairs, unresolvedNames.length === 1);
+  return (
+    `Unknown ${label} ${quoted}. ${subject} neither a jirallm field name nor any field ` +
+    `in this Jira instance.${hint} Run \`jirallm fields\` to list this instance's custom ` +
+    'fields and their ids.'
+  );
+}
+
 export function hasSprintRequested(friendlyKeys: string[], customFieldDefs: CustomFieldDefs): boolean {
   if (!friendlyKeys.includes('sprint')) return false;
   // If user provided a "sprint" custom field override, no autodetection needed.
