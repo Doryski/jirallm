@@ -901,7 +901,7 @@ program
   .option('--next-page-token <token>', 'Alias for --cursor')
   .option(
     '--fields <list>',
-    'Field set to include: preset (all|default|minimal), +add/-drop, or a bare comma list. Unlike fetch/export, search also accepts unmapped raw Jira field IDs (e.g. customfield_10050, environment) — IDs only, not display names; an unrecognised name is verified against this instance once and rejected if no such field exists'
+    'Field set to include: preset (all|default|minimal), +add/-drop, or a bare comma list. Unlike fetch/export, search also accepts unmapped raw Jira field IDs (e.g. customfield_10050, environment) — IDs only, not display names; an unrecognised name is verified against this instance once and rejected if no such field exists. `epic` is supported and resolved to this instance\'s Epic Link field id; `subtasks` is not projectable by search — naming it is an error, and it is dropped with a warning when it only arrives from a preset or the configured base'
   )
   .option('--json', 'Output JSON instead of human-readable')
   .action(async (jql: string, opts: Omit<import('./commands/search.js').SearchOptions, 'jql'>) => {
@@ -938,11 +938,32 @@ the issue has none; issueType/priority are omitted when Jira does not supply
 them). Drop it with --fields -parent — that is all --fields does to \`parent\`:
 the sub-object's own shape is fixed and does not follow the --fields vocabulary.
 
+\`epic\` is projectable here too: the instance's Epic Link custom field id is
+resolved at runtime — the org's \`[orgs.X.export.custom_fields] epic\` override
+first, else auto-detected from the field catalog (gh-epic-link schema, or a
+field named "Epic Link"), else the common epic custom field IDs — and added to
+the request, exactly as \`sprint\` and \`storyPoints\` already are. Either shape
+Jira returns is read — an epic object or a bare epic key; the title is omitted
+when Jira supplies none. \`sprint\`, \`storyPoints\` and \`epic\` each need the
+field catalog when no override pins the id; the read is memoised per client, so
+a successful read is fetched once and shared with the catalog check above. If
+the catalog read fails (5xx, 403) nothing is memoised and each detection
+retries it on its own.
+
+\`subtasks\` is not projectable here. Jira returns no subtasks in a search page,
+so it would cost one extra request per row (up to 50). Naming it explicitly
+(--fields subtasks, --fields default,+subtasks) is an error; when it only
+arrives implicitly — from a preset (\`minimal\`, \`default\` and \`all\` all
+contain it) or the configured base — it is dropped with a warning and the search
+runs. The name is matched case-insensitively either way. Use
+\`jirallm fetch <KEY> --with-subtasks\`.
+
 Examples:
   $ jirallm search 'assignee = currentUser() AND statusCategory != Done' -o acme --json
   $ jirallm search 'project = PROJ AND sprint in openSprints()' -o acme --limit 25
   $ jirallm search 'project = PROJ' -o acme --cursor eyJsYXN0SXNzdWVLZXkiOi4uLn0= --json
   $ jirallm search 'project = PROJ' -o acme --fields default,+priority,+labels --json
+  $ jirallm search 'project = PROJ' -o acme --fields default,+epic --json # epic link per instance
   $ jirallm search 'project = PROJ' -o acme --fields all --json
   $ jirallm search 'project = PROJ' -o acme --fields status --json   # narrow the rows
   $ jirallm search 'parent in (PROJ-100, PROJ-200)' -o acme --json   # group children by row.parent.key

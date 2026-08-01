@@ -289,7 +289,7 @@ export type JiraTaskData = {
   timetracking?: TimeTrackingSummary;
   issueLinks?: IssueLinkSummary[];
   parent?: ParentRef;
-  epic?: { key: string; title: string };
+  epic?: { key: string; title?: string };
   subtasks?: SubtaskSummary[];
   customFields?: Record<string, unknown>;
   attachments: Array<{ id: string; filename: string; url: string; size: number }>;
@@ -328,7 +328,7 @@ export type JiraTaskSummary = {
   status: string;
   issueType?: string;
   parent?: ParentRef;
-  epic?: { key: string; title: string };
+  epic?: { key: string; title?: string };
   subtasks?: SubtaskSummary[];
 };
 
@@ -657,12 +657,15 @@ export const requestWithRedirectPolicy = async (
   }
 };
 
+const EPIC_LINK_CUSTOM_SCHEMA = 'com.pyxis.greenhopper.jira:gh-epic-link' as const;
+
 export class JiraClient {
   private config: JiraConfig;
   private authHeader: string;
   private fieldsCache?: JiraFieldMeta[];
   private sprintFieldIdCache?: string | null;
   private storyPointsFieldIdCache?: string | null;
+  private epicLinkFieldIdCache?: string | null;
 
   constructor(config: JiraConfig, apiToken: string) {
     this.config = config;
@@ -715,6 +718,21 @@ export class JiraClient {
       return match?.id;
     } catch {
       this.storyPointsFieldIdCache = null;
+      return undefined;
+    }
+  }
+
+  async detectEpicLinkFieldId(): Promise<string | undefined> {
+    if (this.epicLinkFieldIdCache !== undefined) return this.epicLinkFieldIdCache ?? undefined;
+    try {
+      const fields = await this.listFields();
+      const match =
+        fields.find((f) => f.schema?.custom === EPIC_LINK_CUSTOM_SCHEMA) ??
+        fields.find((f) => /^epic\s*link$/i.test(f.name ?? ''));
+      this.epicLinkFieldIdCache = match?.id ?? null;
+      return match?.id;
+    } catch {
+      this.epicLinkFieldIdCache = null;
       return undefined;
     }
   }

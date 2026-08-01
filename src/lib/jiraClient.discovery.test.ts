@@ -415,6 +415,81 @@ describe('JiraClient — request error propagation', () => {
   });
 });
 
+describe('JiraClient.detectEpicLinkFieldId', () => {
+  const fieldCatalog = (fields: unknown[]) => (url: string) =>
+    url.endsWith('/field') ? fields : [];
+
+  it('discovers the field by the greenhopper epic link schema key', async () => {
+    const { client, calls } = captureFetch(
+      fieldCatalog([
+        { id: 'customfield_1', name: 'Something Else' },
+        {
+          id: 'customfield_10014',
+          name: 'Localised Epic Header',
+          schema: { custom: 'com.pyxis.greenhopper.jira:gh-epic-link' },
+        },
+      ])
+    );
+    await expect(client.detectEpicLinkFieldId()).resolves.toBe('customfield_10014');
+    expect(calls[0].url).toContain('/rest/api/3/field');
+  });
+
+  it('falls back to a case-insensitive "Epic Link" name match', async () => {
+    const { client } = captureFetch(
+      fieldCatalog([
+        { id: 'customfield_1', name: 'Sprint' },
+        { id: 'customfield_10008', name: 'epic link' },
+      ])
+    );
+    await expect(client.detectEpicLinkFieldId()).resolves.toBe('customfield_10008');
+  });
+
+  it('does not match a field named "Epic Name"', async () => {
+    const { client } = captureFetch(
+      fieldCatalog([{ id: 'customfield_10011', name: 'Epic Name' }])
+    );
+    await expect(client.detectEpicLinkFieldId()).resolves.toBeUndefined();
+  });
+
+  it('returns undefined when the catalog has no epic link field', async () => {
+    const { client } = captureFetch(
+      fieldCatalog([
+        { id: 'summary', name: 'Summary' },
+        { id: 'customfield_1', name: 'Story Points' },
+      ])
+    );
+    await expect(client.detectEpicLinkFieldId()).resolves.toBeUndefined();
+  });
+
+  it('memoises the positive result without re-requesting /field', async () => {
+    const { client, calls } = captureFetch(
+      fieldCatalog([
+        {
+          id: 'customfield_10014',
+          name: 'Epic Link',
+          schema: { custom: 'com.pyxis.greenhopper.jira:gh-epic-link' },
+        },
+      ])
+    );
+    await client.detectEpicLinkFieldId();
+    await client.detectEpicLinkFieldId();
+    expect(calls.filter((c) => c.url.endsWith('/field'))).toHaveLength(1);
+  });
+
+  it('memoises the negative result without re-requesting /field', async () => {
+    const { client, calls } = captureFetch(fieldCatalog([{ id: 'summary', name: 'Summary' }]));
+    await expect(client.detectEpicLinkFieldId()).resolves.toBeUndefined();
+    await expect(client.detectEpicLinkFieldId()).resolves.toBeUndefined();
+    expect(calls.filter((c) => c.url.endsWith('/field'))).toHaveLength(1);
+  });
+
+  it('returns undefined instead of throwing when listFields rejects', async () => {
+    installError(500, 'Internal Server Error', 'kaboom');
+    const client = new JiraClient(FAKE_CONFIG, 'token');
+    await expect(client.detectEpicLinkFieldId()).resolves.toBeUndefined();
+  });
+});
+
 describe('JiraClient.listStatuses', () => {
   it('GETs /status when no project provided', async () => {
     const { client, calls } = captureFetch(() => [{ id: '1', name: 'Open' }]);

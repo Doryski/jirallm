@@ -10,8 +10,12 @@ import {
   SEARCH_ALWAYS_FETCH,
   SEARCH_DEFAULT_KEYS,
 } from '../../lib/exportFields.js';
-import type { CustomFieldDefs, FieldSelector } from '../../lib/exportFields.js';
-import { PROJECTABLE_FIELDS, projectIssueFields } from '../../lib/fieldProjection.js';
+import type { CustomFieldDefs, FieldSelector, PresetName } from '../../lib/exportFields.js';
+import {
+  COMMON_EPIC_FIELDS,
+  PROJECTABLE_FIELDS,
+  projectIssueFields,
+} from '../../lib/fieldProjection.js';
 import type { ProjectionContext } from '../../lib/fieldProjection.js';
 import { printJson, shouldOutputJson } from '../jsonOutput.js';
 
@@ -147,6 +151,50 @@ async function assertFieldsKnownToJira(
   throw new Error(messages.join('\n'));
 }
 
+const SUBTASKS_KEY = 'subtasks';
+
+const isSubtasksToken = (token: string) => token.trim().toLowerCase() === SUBTASKS_KEY;
+
+const isExplicitlyIncluded = (selector: FieldSelector | undefined) =>
+  Boolean(includeOnly(selector)?.include?.some(isSubtasksToken));
+
+const hasCustomOverride = (customFieldDefs: CustomFieldDefs, name: string) =>
+  Object.hasOwn(customFieldDefs, name);
+
+function formatSubtasksUnsupportedError(): string {
+  return (
+    'Unsupported field `subtasks`. `search` cannot project it — a Jira search page carries no ' +
+    'subtask data, and reading it would cost one extra request per row. Drop `subtasks` from ' +
+    '`--fields`, or run `jirallm fetch <KEY> --with-subtasks` for a single issue.'
+  );
+}
+
+function formatSubtasksDroppedWarning(preset: PresetName | undefined): string {
+  const source = preset ? `the \`${preset}\` preset lists` : 'the requested fields include';
+  return (
+    `Warning: ${source} \`subtasks\`, which \`search\` cannot project — ` +
+    'a Jira search page carries no subtask data, so the key is omitted from the rows. Run ' +
+    '`jirallm fetch <KEY> --with-subtasks` for a single issue.'
+  );
+}
+
+function assertSubtasksNotRequested(
+  selector: FieldSelector | undefined,
+  customFieldDefs: CustomFieldDefs
+): void {
+  if (hasCustomOverride(customFieldDefs, SUBTASKS_KEY)) return;
+  if (!isExplicitlyIncluded(selector)) return;
+  throw new Error(formatSubtasksUnsupportedError());
+}
+
+const leaksSubtasks = (names: readonly string[], customFieldDefs: CustomFieldDefs) =>
+  !hasCustomOverride(customFieldDefs, SUBTASKS_KEY) && names.some(isSubtasksToken);
+
+const withoutSubtasks = (names: readonly string[], customFieldDefs: CustomFieldDefs) =>
+  hasCustomOverride(customFieldDefs, SUBTASKS_KEY)
+    ? [...names]
+    : names.filter((name) => !isSubtasksToken(name));
+
 async function resolveProjectionContext(
   client: JiraClient,
   friendlyKeys: readonly string[],
@@ -158,13 +206,29 @@ async function resolveProjectionContext(
   const storyPointsFieldId = friendlyKeys.includes('storyPoints')
     ? customFieldDefs.storyPoints?.id ?? (await client.detectStoryPointsFieldId())
     : undefined;
-  return { sprintFieldId, storyPointsFieldId, customFieldDefs };
+  const epicFieldId = friendlyKeys.includes('epic')
+    ? customFieldDefs.epic?.id ?? (await client.detectEpicLinkFieldId())
+    : undefined;
+  return { sprintFieldId, storyPointsFieldId, epicFieldId, customFieldDefs };
 }
 
-function withDiscoveredIds(jiraFieldIds: readonly string[], ctx: ProjectionContext): string[] {
-  const extra = [ctx.sprintFieldId, ctx.storyPointsFieldId].filter(
-    (id): id is string => Boolean(id)
-  );
+function epicFallbackIds(friendlyKeys: readonly string[], ctx: ProjectionContext) {
+  if (ctx.epicFieldId) return [];
+  if (!friendlyKeys.includes('epic')) return [];
+  return [...COMMON_EPIC_FIELDS];
+}
+
+function withDiscoveredIds(
+  jiraFieldIds: readonly string[],
+  friendlyKeys: readonly string[],
+  ctx: ProjectionContext
+): string[] {
+  const extra = [
+    ...[ctx.sprintFieldId, ctx.storyPointsFieldId, ctx.epicFieldId].filter(
+      (id): id is string => Boolean(id)
+    ),
+    ...epicFallbackIds(friendlyKeys, ctx),
+  ];
   if (extra.length === 0) return [...jiraFieldIds];
   return [...new Set([...jiraFieldIds, ...extra])];
 }
@@ -196,23 +260,27 @@ export async function runSearch(opts: SearchOptions): Promise<void> {
     passThroughUnknown: true,
   });
 
+  assertSubtasksNotRequested(selector, customFieldDefs);
+
+  if (leaksSubtasks(resolved.friendlyKeys, customFieldDefs)) {
+    console.warn(formatSubtasksDroppedWarning(selector?.preset));
+  }
+  const friendlyKeys = withoutSubtasks(resolved.friendlyKeys, customFieldDefs);
+  const jiraFieldIds = withoutSubtasks(resolved.jiraFieldIds, customFieldDefs);
+
   await assertFieldsKnownToJira(client, selector, customFieldDefs);
 
-  const ctx = await resolveProjectionContext(client, resolved.friendlyKeys, customFieldDefs);
+  const ctx = await resolveProjectionContext(client, friendlyKeys, customFieldDefs);
   const limit = opts.limit ? parseInt(opts.limit, 10) : 50;
 
   const page = await client.searchIssues(opts.jql, {
-    fields: withDiscoveredIds(resolved.jiraFieldIds, ctx),
+    fields: withDiscoveredIds(jiraFieldIds, friendlyKeys, ctx),
     limit,
     nextPageToken: opts.nextPageToken || opts.cursor,
   });
 
   const rows = page.issues.map((issue) =>
-    buildRow(
-      { key: issue.key, fields: issue.fields as Record<string, unknown> },
-      resolved.friendlyKeys,
-      ctx
-    )
+    buildRow({ key: issue.key, fields: issue.fields as Record<string, unknown> }, friendlyKeys, ctx)
   );
 
   if (shouldOutputJson(opts)) {

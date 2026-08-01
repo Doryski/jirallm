@@ -119,6 +119,24 @@ describe('JiraExporter.exportIssue frontmatter', () => {
     expect(content).not.toMatch(/customFields:/);
   });
 
+  it('renders a key-only epic when the epic title is an empty string', async () => {
+    const exporter = makeExporter({ ...FULL_TASK, epic: { key: 'PROJ-42', title: '' } });
+    await exporter.exportIssue('PROJ-1', { outputDir: tmpDir });
+    const content = readFileSync(join(tmpDir, 'proj-1', 'task.md'), 'utf-8');
+
+    expect(content).toMatch(/^epic: "PROJ-42"$/m);
+    expect(content).not.toMatch(/epic: "PROJ-42 -/);
+  });
+
+  it('renders a key-only epic when the epic title is omitted', async () => {
+    const exporter = makeExporter({ ...FULL_TASK, epic: { key: 'PROJ-42' } });
+    await exporter.exportIssue('PROJ-1', { outputDir: tmpDir });
+    const content = readFileSync(join(tmpDir, 'proj-1', 'task.md'), 'utf-8');
+
+    expect(content).toMatch(/^epic: "PROJ-42"$/m);
+    expect(content).not.toMatch(/epic: "PROJ-42 -/);
+  });
+
   it('honors minimal preset (legacy fields only)', async () => {
     const exporter = makeExporter(FULL_TASK);
     await exporter.exportIssue('PROJ-1', {

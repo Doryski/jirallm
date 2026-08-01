@@ -23,12 +23,14 @@ vi.mock('../../lib/config.js', () => ({
 const searchIssuesMock = vi.fn();
 const detectSprintFieldIdMock = vi.fn(async () => 'customfield_10020');
 const detectStoryPointsFieldIdMock = vi.fn(async () => 'customfield_10030');
+const detectEpicLinkFieldIdMock = vi.fn(async (): Promise<string | undefined> => 'customfield_10014');
 const listFieldsMock = vi.fn();
 vi.mock('../../lib/jiraClient.js', () => ({
   JiraClient: class {
     searchIssues = searchIssuesMock;
     detectSprintFieldId = detectSprintFieldIdMock;
     detectStoryPointsFieldId = detectStoryPointsFieldIdMock;
+    detectEpicLinkFieldId = detectEpicLinkFieldIdMock;
     listFields = listFieldsMock;
   },
 }));
@@ -100,6 +102,21 @@ const CATALOG = [
     },
   },
   {
+    id: 'customfield_10014',
+    key: 'customfield_10014',
+    name: 'Epic Link',
+    custom: true,
+    orderable: true,
+    navigable: true,
+    searchable: true,
+    clauseNames: ['cf[10014]', 'Epic Link'],
+    schema: {
+      type: 'any',
+      custom: 'com.pyxis.greenhopper.jira:gh-epic-link',
+      customId: 10014,
+    },
+  },
+  {
     id: 'customfield_10016',
     key: 'customfield_10016',
     name: 'Story Points',
@@ -123,6 +140,7 @@ import {
   SEARCH_ALWAYS_FETCH,
   SEARCH_DEFAULT_KEYS,
 } from '../../lib/exportFields.js';
+import { COMMON_EPIC_FIELDS } from '../../lib/fieldProjection.js';
 
 const resolveSearchFields = (raw?: string) =>
   resolveFieldSet(raw ? parseFieldsFlag(raw) : undefined, {}, {
@@ -153,6 +171,26 @@ const SAMPLE_ISSUES = [
   },
 ] as const;
 
+const ISSUE_WITH_EPIC = {
+  key: 'PROJ-3',
+  fields: {
+    summary: 'three',
+    status: { name: 'Open' },
+    customfield_10014: { key: 'PROJ-50', fields: { summary: 'Epic fifty' } },
+    customfield_10008: { key: 'PROJ-60', fields: { summary: 'Epic sixty' } },
+    customfield_99001: 'PROJ-77',
+  },
+} as const;
+
+const ISSUE_WITH_LEGACY_EPIC = {
+  key: 'PROJ-4',
+  fields: {
+    summary: 'four',
+    status: { name: 'Open' },
+    customfield_10008: { key: 'PROJ-60', fields: { summary: 'Epic sixty' } },
+  },
+} as const;
+
 const childOf = (key: string, parentKey: string) =>
   ({
     key,
@@ -182,6 +220,8 @@ beforeEach(() => {
   searchIssuesMock.mockReset();
   detectSprintFieldIdMock.mockClear();
   detectStoryPointsFieldIdMock.mockClear();
+  detectEpicLinkFieldIdMock.mockClear();
+  detectEpicLinkFieldIdMock.mockResolvedValue('customfield_10014');
   listFieldsMock.mockReset();
   listFieldsMock.mockResolvedValue([...CATALOG]);
 });
@@ -714,6 +754,126 @@ describe('runSearch', () => {
     expect(warn.mock.calls[0][0]).toContain('Warning: could not verify --fields');
     expect(warn.mock.calls[0][0]).toContain('403 Forbidden');
     expect(searchIssuesMock).toHaveBeenCalled();
+  });
+
+  it('puts the resolved Epic Link id on the wire and the epic on the row (issue #25)', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    searchIssuesMock.mockResolvedValue({ issues: [ISSUE_WITH_EPIC], isLast: true });
+    const parsed = await runJsonSearch({ jql: 'x', json: true, fields: 'default,+epic' });
+    expect(detectEpicLinkFieldIdMock).toHaveBeenCalledTimes(1);
+    expect(searchIssuesMock.mock.calls[0][1].fields).toContain('customfield_10014');
+    expect(parsed.issues[0].epic).toEqual({ key: 'PROJ-50', title: 'Epic fifty' });
+  });
+
+  it('prefers the org-config epic id over autodetection (issue #25)', async () => {
+    loadOrgProfileMock.mockResolvedValueOnce({
+      config: { baseUrl: 'https://x', userEmail: 'u@x' },
+      org: {
+        name: 'acme',
+        export: { customFieldDefs: { epic: { id: 'customfield_99001', type: 'scalar' } } },
+      },
+      apiToken: 'tok',
+    });
+    searchIssuesMock.mockResolvedValue({ issues: [ISSUE_WITH_EPIC], isLast: true });
+    const parsed = await runJsonSearch({ jql: 'x', json: true, fields: 'epic' });
+    expect(detectEpicLinkFieldIdMock).not.toHaveBeenCalled();
+    expect(searchIssuesMock.mock.calls[0][1].fields).toContain('customfield_99001');
+    expect(parsed.issues[0].epic).toEqual({ key: 'PROJ-77' });
+  });
+
+  it('falls back to the common epic field ids when detection finds nothing (issue #25)', async () => {
+    detectEpicLinkFieldIdMock.mockResolvedValue(undefined);
+    searchIssuesMock.mockResolvedValue({ issues: [ISSUE_WITH_LEGACY_EPIC], isLast: true });
+    const parsed = await runJsonSearch({ jql: 'x', json: true, fields: 'epic' });
+    const requested = searchIssuesMock.mock.calls[0][1].fields;
+    expect(requested).toEqual(expect.arrayContaining([...COMMON_EPIC_FIELDS]));
+    expect(parsed.issues[0].epic).toEqual({ key: 'PROJ-60', title: 'Epic sixty' });
+  });
+
+  it('never detects the Epic Link field when epic is not selected (issue #25)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    await runJsonSearch({ jql: 'x', json: true });
+    expect(detectEpicLinkFieldIdMock).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+    expect(searchIssuesMock.mock.calls[0][1].fields).not.toEqual(
+      expect.arrayContaining([...COMMON_EPIC_FIELDS])
+    );
+  });
+
+  it.each(['subtasks', 'default,+subtasks'])(
+    'rejects an explicitly requested subtasks in --fields "%s" (issue #25)',
+    async (fields) => {
+      searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+      await expect(runSearch({ jql: 'x', json: true, fields })).rejects.toThrow(
+        'Unsupported field `subtasks`. `search` cannot project it — a Jira search page carries ' +
+          'no subtask data, and reading it would cost one extra request per row. Drop `subtasks` ' +
+          'from `--fields`, or run `jirallm fetch <KEY> --with-subtasks` for a single issue.'
+      );
+      expect(searchIssuesMock).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['Subtasks', 'SUBTASKS', 'default,+Subtasks', 'default,+ subtasks '])(
+    'rejects a case/space variant of subtasks in --fields "%s" (issue #25)',
+    async (fields) => {
+      searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+      await expect(runSearch({ jql: 'x', json: true, fields })).rejects.toThrow(
+        'Unsupported field `subtasks`. `search` cannot project it — a Jira search page carries ' +
+          'no subtask data, and reading it would cost one extra request per row. Drop `subtasks` ' +
+          'from `--fields`, or run `jirallm fetch <KEY> --with-subtasks` for a single issue.'
+      );
+      expect(searchIssuesMock).not.toHaveBeenCalled();
+    }
+  );
+
+  it('never puts a subtasks variant on the wire even when the field catalog read fails (issue #25)', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    listFieldsMock.mockRejectedValue(new Error('catalog unavailable'));
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    await expect(runSearch({ jql: 'x', json: true, fields: 'default,+Subtasks' })).rejects.toThrow(
+      /Unsupported field `subtasks`/
+    );
+    expect(searchIssuesMock).not.toHaveBeenCalled();
+
+    await runJsonSearch({ jql: 'x', json: true, fields: 'default' });
+    const requested: string[] = searchIssuesMock.mock.calls[0][1].fields;
+    expect(requested.some((id) => id.trim().toLowerCase() === 'subtasks')).toBe(false);
+  });
+
+  it('does not throw when a subtasks case variant is excluded (issue #25)', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    await expect(runSearch({ jql: 'x', json: true, fields: 'minimal,-Subtasks' })).resolves.toBeUndefined();
+    const requested: string[] = searchIssuesMock.mock.calls[0][1].fields;
+    expect(requested.some((id) => id.trim().toLowerCase() === 'subtasks')).toBe(false);
+  });
+
+  it.each(['minimal', 'default', 'all'] as const)(
+    'warns once about preset subtasks and still searches for --fields "%s" (issue #25)',
+    async (preset) => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      searchIssuesMock.mockResolvedValue({ issues: [ISSUE_WITH_EPIC], isLast: true });
+      const parsed = await runJsonSearch({ jql: 'x', json: true, fields: preset });
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toBe(
+        `Warning: the \`${preset}\` preset lists \`subtasks\`, which \`search\` cannot project — ` +
+          'a Jira search page carries no subtask data, so the key is omitted from the rows. Run ' +
+          '`jirallm fetch <KEY> --with-subtasks` for a single issue.'
+      );
+      expect(searchIssuesMock).toHaveBeenCalledTimes(1);
+      expect('subtasks' in parsed.issues[0]).toBe(false);
+      expect(parsed.issues[0].epic).toEqual({ key: 'PROJ-50', title: 'Epic fifty' });
+    }
+  );
+
+  it('leaves a bare search free of any subtasks warning (issue #25)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    const parsed = await runJsonSearch({ jql: 'x', json: true });
+    expect(warn).not.toHaveBeenCalled();
+    expect('subtasks' in parsed.issues[0]).toBe(false);
+    expect('epic' in parsed.issues[0]).toBe(false);
   });
 
   it('prints cursor hint when more results available + TTY', async () => {

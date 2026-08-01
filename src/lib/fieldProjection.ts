@@ -42,8 +42,11 @@ export type ProjectableField = (typeof PROJECTABLE_FIELDS)[number];
 export type ProjectionContext = {
   sprintFieldId?: string;
   storyPointsFieldId?: string;
+  epicFieldId?: string;
   customFieldDefs?: CustomFieldDefs;
 };
+
+export type EpicRef = NonNullable<JiraTaskData['epic']>;
 
 type RawFields = Record<string, unknown>;
 
@@ -109,16 +112,22 @@ export function extractCustomFieldValue(raw: unknown, type: string): unknown {
   }
 }
 
-export function extractEpicFromFields(
-  fields: RawFields
-): { key: string; title: string } | undefined {
+export function extractEpicFromFields(fields: RawFields): EpicRef | undefined {
   for (const fieldId of COMMON_EPIC_FIELDS) {
-    const epicField = fields[fieldId] as { key: string; fields: { summary: string } } | undefined;
-    if (epicField?.key && epicField.fields?.summary) {
-      return { key: epicField.key, title: epicField.fields.summary };
-    }
+    const epic = extractEpicFromValue(fields[fieldId]);
+    if (epic) return epic;
   }
   return undefined;
+}
+
+export function extractEpicFromValue(raw: unknown): EpicRef | undefined {
+  const bareKey = nonEmptyString(raw);
+  if (bareKey) return { key: bareKey };
+  const epic = raw as { key?: unknown; fields?: { summary?: unknown } } | undefined;
+  const key = nonEmptyString(epic?.key);
+  if (!key) return undefined;
+  const title = nonEmptyString(epic?.fields?.summary);
+  return title ? { key, title } : { key };
 }
 
 const nameOf = (raw: unknown) => (raw as { name?: string } | undefined)?.name || undefined;
@@ -223,8 +232,18 @@ const EXTRACTORS = {
   timetracking: (f) => extractTimeTracking(f.timetracking),
   issueLinks: (f) => extractIssueLinks(f.issuelinks),
   parent: (f) => extractParent(f.parent),
-  epic: (f) => extractEpicFromFields(f),
+  epic: (f, ctx) => {
+    const epicFieldId = ctx.epicFieldId ?? ctx.customFieldDefs?.epic?.id;
+    const fromContext = epicFieldId ? extractEpicFromValue(f[epicFieldId]) : undefined;
+    return fromContext ?? extractEpicFromFields(f);
+  },
 } as const satisfies Record<ProjectableField, FieldExtractor>;
+
+const EXTRACTOR_OWNED_FIELDS: ReadonlySet<string> = new Set([
+  'sprint',
+  'storyPoints',
+  'epic',
+] satisfies ProjectableField[]);
 
 function projectCustomFields(
   rawFields: RawFields,
@@ -233,7 +252,7 @@ function projectCustomFields(
 ): Record<string, unknown> | undefined {
   const projected: Record<string, unknown> = {};
   for (const [friendly, def] of Object.entries(customFieldDefs)) {
-    if (friendly === 'sprint' || friendly === 'storyPoints') continue;
+    if (EXTRACTOR_OWNED_FIELDS.has(friendly)) continue;
     if (!selected.has(friendly)) continue;
     const value = extractCustomFieldValue(rawFields[def.id], def.type);
     if (value !== undefined && value !== null && value !== '') projected[friendly] = value;

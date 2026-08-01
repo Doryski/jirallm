@@ -18,6 +18,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   so a `parent in (A, B, C)` query groups into a parent → children map without an extra `fetch` per
   child. Drop it with `--fields -parent`; a narrowing selector like `--fields summary,status` omits
   it. Human-readable output labels the parent key on each line when present.
+- `search --fields` now projects `epic` (#25). The instance's Epic Link custom field id is resolved
+  at runtime — the org's `[orgs.X.export.custom_fields] epic` override first, else auto-detected
+  from the field catalog (the `com.pyxis.greenhopper.jira:gh-epic-link` schema, or a field named
+  "Epic Link"), else the common epic custom field ids — and added to the request exactly as `sprint`
+  and `storyPoints` already were, so `jirallm search 'project = PROJ' --fields default,+epic` emits
+  the epic on every row. Either shape Jira returns is read — an epic object or a bare epic key, with
+  the title omitted when Jira supplies none — on both the resolved-id and the fallback path. The
+  catalog read is memoised per client, so a successful read is one shared
+  `GET /rest/api/3/field` across the raw-ID check and the sprint / story-points / epic detection; a
+  catalog read that fails is not memoised and each detection retries it on its own.
 - `ParentRef` is now a public type export (used by `JiraTaskData.parent` and
   `JiraTaskSummary.parent`).
 - Failed Jira requests now throw a `JiraApiError` carrying the response `status`, `body` and
@@ -30,6 +40,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   under a Story under an Epic pulls both. It is the counterpart to `--include-subtasks`, which goes
   the other way and stays metadata-only. The flag has no org-config counterpart; the library
   equivalent is `includeParent` on `ExportOptions`.
+
+### Changed
+
+- `epic.title` is now optional on `JiraTaskData` and `JiraTaskSummary` (#25). Jira hands back a bare
+  epic key with no summary on some instances, so the title can legitimately be absent; the exported
+  frontmatter prints the key alone rather than `KEY - undefined`, and `--json` omits the `title`
+  property entirely. Consumers that read `epic.title` must now handle `undefined`.
 
 ### Removed
 
@@ -47,6 +64,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `search --fields` no longer accepts `epic` and `subtasks` and then silently returns neither (#25).
+  Both friendly names map to internal sentinels that are stripped from the wire request, and
+  `search` had no step to resolve them the way it already resolved `sprint` and `storyPoints`, so
+  `jirallm search 'project = PROJ' --fields default,+epic` and `--fields minimal` returned rows
+  without either field while `fetch` on the same issue returned both. `epic` is now resolved and
+  returned. `subtasks` cannot be projected by `search` at all — Jira returns no subtasks in a search
+  page, so it would mean one extra request per row on a page of up to 50 — and it now fails loudly
+  instead of silently: naming it explicitly (`--fields subtasks`, `--fields default,+subtasks`) is
+  an error exiting 1 and pointing at `jirallm fetch <KEY> --with-subtasks`, while `subtasks` arriving
+  only implicitly — from a preset (`minimal`, `default` and `all` all contain it) or the configured
+  base — prints one `Warning:` line on stderr and the search proceeds, so those presets stay usable.
+  Both guards match the name case-insensitively.
+  `fetch` and `export` are unchanged and still supply subtasks via `--with-subtasks` /
+  `includeSubtasks`.
 - `--fields "+name"` now adds to the current field set instead of replacing it (#23). Previously a
   lone `+name` (with no `-name` alongside it and no explicit preset) was indistinguishable from a
   bare replacement list, so asking for one extra field silently discarded the rest of the preset —

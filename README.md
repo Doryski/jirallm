@@ -150,6 +150,20 @@ jirallm PROJ-7 --fields "key,status"       # bare list replaces the configured b
 
 Only `+name` / `-name` adjustments compose; a bare comma list or an explicit preset in the flag replaces the config base outright. Valid names are the friendly field names, their raw-ID aliases (`duedate`, `issuelinks`), and any configured custom-field key — anything else is rejected with an error. An unknown name coming from the config block is reported as a warning and skipped, so a stale config never blocks an export.
 
+#### What each command can project
+
+`--fields` uses the same vocabulary everywhere, but a few keys behave differently on `search`, which reads a whole page of issues in one request:
+
+| Field | `fetch` / `export` | `search` |
+| --- | --- | --- |
+| `epic` | Yes — always requested, via the common epic custom-field IDs | Yes — the instance's Epic Link field ID is resolved at runtime: the org's `[orgs.X.export.custom_fields] epic` override first, else auto-detected from the field catalog, else the common epic IDs. Either shape Jira returns is read — an epic object or a bare epic key (the title is omitted when Jira supplies none) |
+| `subtasks` | Yes — but supplied by `fetch --with-subtasks` / `export --include-subtasks` (one extra request per issue), not by `--fields` alone | No — Jira returns no subtasks in a search page. Naming it (`--fields subtasks`, `--fields default,+subtasks`) is an error; when it only arrives implicitly — from a preset (`minimal`, `default` and `all` all list it) or the configured base — it is dropped with a warning and the search runs. The name is matched case-insensitively either way. Use `jirallm fetch <KEY> --with-subtasks` |
+| `sprint` | Yes — custom-field ID from the org override, else auto-detected | Yes — same resolution |
+| `storyPoints` | Yes — custom-field ID from the org override, else auto-detected | Yes — same resolution |
+| `parent` | Yes — always requested | Yes — in the default set; drop it with `--fields -parent` |
+
+`sprint`, `storyPoints` and `epic` each need the instance's field catalog when the org config does not pin an ID. The catalog read is memoised per client, so when it succeeds the three detections and `search`'s raw-ID check share a single `GET /rest/api/3/field`. A catalog read that fails (5xx, 403) is not memoised, so each detection retries it independently and the request count grows with the number of fields being detected.
+
 ## Quick start
 
 ### CLI
@@ -250,6 +264,8 @@ jirallm search 'assignee = currentUser() AND statusCategory != Done' --org acme 
 jirallm search 'project = PROJ' --org acme --fields default,+labels --json  # --fields shapes the JSON rows too (same vocabulary as `fetch`; `search` alone also accepts unmapped raw Jira field **IDs** such as customfield_10050 or environment — not display names like "Team")
 jirallm search 'project = PROJ' --org acme --fields customfield_10050 --json  # an ID outside jirallm's vocabulary is checked against /rest/api/3/field once and rejected if this instance has no such field (typos fail loudly instead of returning an empty column); run `jirallm fields` for custom-field IDs
 jirallm search 'parent in (PROJ-100, PROJ-200)' --org acme --json  # rows carry `parent` ({key, title, status, issueType, priority} — the last two omitted when Jira has none) by default; drop it with `--fields -parent`
+jirallm search 'project = PROJ' --org acme --fields default,+epic --json  # `epic` works on search: the Epic Link field ID is resolved per instance (org override, else auto-detected, else the common epic IDs), sharing one `GET /rest/api/3/field` with the other detections when the catalog read succeeds
+jirallm search 'project = PROJ' --org acme --fields minimal --json  # `subtasks` is not projectable by search: it is dropped with a warning here, and is an error when named explicitly — use `jirallm fetch <KEY> --with-subtasks`
 jirallm fetch PROJ-123 --json
 jirallm fetch PROJ-123 --fields all --json      # widen the field set (components, labels, custom fields, ...)
 jirallm fetch PROJ-123 --fields +priority --json  # +name adds to the current set, -name removes; fetch/export accept friendly names, their raw-ID aliases (duedate, issuelinks) and configured custom-field keys — anything else is an error

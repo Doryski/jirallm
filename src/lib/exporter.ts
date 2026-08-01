@@ -160,6 +160,11 @@ function serializeYamlObjectInline(obj: unknown, indent: string): string {
   return out;
 }
 
+function formatIssueRef(ref: { key: string; title?: string }): string {
+  if (!ref.title) return ref.key;
+  return `${ref.key} - ${ref.title}`;
+}
+
 function buildFrontmatterBlock(task: JiraTaskData, selectedKeys: Set<string>): string {
   const pickIfSelected = <T,>(key: string, val: T | undefined): T | undefined =>
     selectedKeys.has(key) && !isEmpty(val) ? val : undefined;
@@ -206,10 +211,10 @@ function buildFrontmatterBlock(task: JiraTaskData, selectedKeys: Set<string>): s
   if (timetracking) jira.timetracking = timetracking;
 
   if (selectedKeys.has('parent') && task.parent) {
-    jira.parent = `${task.parent.key} - ${task.parent.title}`;
+    jira.parent = formatIssueRef(task.parent);
   }
   if (selectedKeys.has('epic') && task.epic) {
-    jira.epic = `${task.epic.key} - ${task.epic.title}`;
+    jira.epic = formatIssueRef(task.epic);
   }
   if (selectedKeys.has('subtasks') && task.subtasks?.length) {
     jira.subtasks = task.subtasks.map((s) => ({

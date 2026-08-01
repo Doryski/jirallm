@@ -140,6 +140,106 @@ describe('projectIssueFields', () => {
     expect(projected.epic).toEqual({ key: 'PROJ-2', title: 'The epic' });
   });
 
+  it('prefers the context epic field id over any common epic-link slot', () => {
+    const projected = projectIssueFields(
+      { ...RAW_FIELDS, customfield_10099: { key: 'PROJ-77', fields: { summary: 'Real epic' } } },
+      ALL_KEYS,
+      { epicFieldId: 'customfield_10099' }
+    );
+    expect(projected.epic).toEqual({ key: 'PROJ-77', title: 'Real epic' });
+  });
+
+  it('still resolves the epic from the common fields when no context id is given', () => {
+    const projected = projectIssueFields(RAW_FIELDS, ALL_KEYS, {});
+    expect(projected.epic).toEqual({ key: 'PROJ-2', title: 'The epic' });
+  });
+
+  it('resolves a bare string epic key and omits the title entirely', () => {
+    const projected = projectIssueFields({ customfield_10099: 'PROJ-42' }, ALL_KEYS, {
+      epicFieldId: 'customfield_10099',
+    });
+    expect(projected.epic).toEqual({ key: 'PROJ-42' });
+    expect(projected.epic).not.toHaveProperty('title');
+    expect(JSON.stringify(projected.epic)).toBe('{"key":"PROJ-42"}');
+    const rendered = projected.epic?.title
+      ? `${projected.epic.key} - ${projected.epic.title}`
+      : `${projected.epic?.key}`;
+    expect(rendered).not.toContain('undefined');
+  });
+
+  it('falls back to the common epic fields when the context field is absent or empty', () => {
+    for (const value of [null, undefined, '', {}, { key: '' }]) {
+      const projected = projectIssueFields({ ...RAW_FIELDS, customfield_10099: value }, ALL_KEYS, {
+        epicFieldId: 'customfield_10099',
+      });
+      expect(projected.epic).toEqual({ key: 'PROJ-2', title: 'The epic' });
+    }
+  });
+
+  it('resolves a bare string epic key from a common field with no context id', () => {
+    for (const fieldId of ['customfield_10014', 'customfield_10008', 'customfield_10001']) {
+      expect(projectIssueFields({ [fieldId]: 'PROJ-60' }, ALL_KEYS, {}).epic).toEqual({
+        key: 'PROJ-60',
+      });
+    }
+  });
+
+  it('resolves a summary-less epic object from a common field as key-only', () => {
+    const projected = projectIssueFields({ customfield_10008: { key: 'PROJ-60' } }, ALL_KEYS, {});
+    expect(projected.epic).toEqual({ key: 'PROJ-60' });
+    expect(projected.epic).not.toHaveProperty('title');
+  });
+
+  it('keeps the common epic field scan order when several slots are populated', () => {
+    const projected = projectIssueFields(
+      {
+        customfield_10014: 'PROJ-14',
+        customfield_10008: { key: 'PROJ-8', fields: { summary: 'Eight' } },
+        customfield_10001: 'PROJ-1',
+      },
+      ALL_KEYS,
+      {}
+    );
+    expect(projected.epic).toEqual({ key: 'PROJ-14' });
+    expect(
+      projectIssueFields({ customfield_10008: 'PROJ-8', customfield_10011: 'PROJ-11' }, ALL_KEYS, {})
+        .epic
+    ).toEqual({ key: 'PROJ-8' });
+  });
+
+  it('skips common epic slots holding no usable key', () => {
+    const projected = projectIssueFields(
+      { customfield_10014: '', customfield_10008: { key: '' }, customfield_10001: 'PROJ-1' },
+      ALL_KEYS,
+      {}
+    );
+    expect(projected.epic).toEqual({ key: 'PROJ-1' });
+  });
+
+  it('never emits the epic sentinel as a custom field when an override is configured', () => {
+    const projected = projectIssueFields({ customfield_99001: 'PROJ-77' }, ['epic'], {
+      epicFieldId: 'customfield_99001',
+      customFieldDefs: { epic: { id: 'customfield_99001', type: 'scalar' } },
+    });
+    expect(projected.epic).toEqual({ key: 'PROJ-77' });
+    expect(projected.customFields).toBeUndefined();
+  });
+
+  it('resolves a configured epic override even when no context epic field id is given', () => {
+    const projected = projectIssueFields({ customfield_99001: 'PROJ-77' }, ['epic'], {
+      customFieldDefs: { epic: { id: 'customfield_99001', type: 'scalar' } },
+    });
+    expect(projected.epic).toEqual({ key: 'PROJ-77' });
+    expect(projected.customFields).toBeUndefined();
+  });
+
+  it('omits the epic when neither the context field nor the common fields yield one', () => {
+    const projected = projectIssueFields({ customfield_10099: null }, ALL_KEYS, {
+      epicFieldId: 'customfield_10099',
+    });
+    expect(projected.epic).toBeUndefined();
+  });
+
   it('labels issue links with the inward or outward direction', () => {
     const projected = projectIssueFields(
       {
