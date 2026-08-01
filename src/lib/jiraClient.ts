@@ -244,6 +244,12 @@ export type IssueLinkSummary = {
   status?: string;
 };
 
+export type ParentRef = {
+  key: string;
+  title: string;
+  status?: string;
+};
+
 export type TimeTrackingSummary = {
   originalEstimate?: string;
   remainingEstimate?: string;
@@ -273,7 +279,7 @@ export type JiraTaskData = {
   storyPoints?: number;
   timetracking?: TimeTrackingSummary;
   issueLinks?: IssueLinkSummary[];
-  parent?: { key: string; title: string; status?: string };
+  parent?: ParentRef;
   epic?: { key: string; title: string };
   subtasks?: SubtaskSummary[];
   customFields?: Record<string, unknown>;
@@ -312,7 +318,7 @@ export type JiraTaskSummary = {
   title: string;
   status: string;
   issueType?: string;
-  parent?: { key: string; title: string; status?: string };
+  parent?: ParentRef;
   epic?: { key: string; title: string };
   subtasks?: SubtaskSummary[];
 };

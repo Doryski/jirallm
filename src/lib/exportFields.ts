@@ -118,7 +118,7 @@ const ALWAYS_FETCH = ['summary', 'description', 'status', 'parent', 'attachment'
 export const SEARCH_ALWAYS_FETCH = ['summary', 'status'] as const;
 export type SearchAlwaysFetchId = (typeof SEARCH_ALWAYS_FETCH)[number];
 
-export const SEARCH_DEFAULT_KEYS = ['key', 'status', 'assignee', 'issueType'] as const;
+export const SEARCH_DEFAULT_KEYS = ['key', 'status', 'assignee', 'issueType', 'parent'] as const;
 export type SearchDefaultKey = (typeof SEARCH_DEFAULT_KEYS)[number];
 
 export type ResolveFieldSetOptions = {

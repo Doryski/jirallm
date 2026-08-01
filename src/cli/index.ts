@@ -844,7 +844,11 @@ Output JSON includes "nextPageToken" — pass it back via --cursor for the next 
 --fields shapes the JSON rows, not just the Jira request: it uses the same
 vocabulary as \`fetch\` (presets, +add/-drop, bare list) and raw Jira field IDs
 are normalised too (issuetype → issueType, duedate → dueDate). Without it, rows
-stay key/summary/status/assignee/issueType.
+stay key/summary/status/assignee/issueType/parent.
+
+\`parent\` is in the default set, with the same normalised {key, title, status}
+shape \`fetch\` returns (omitted when the issue has none); drop it with
+--fields -parent.
 
 Examples:
   $ jirallm search 'assignee = currentUser() AND statusCategory != Done' -o acme --json
@@ -853,6 +857,7 @@ Examples:
   $ jirallm search 'project = PROJ' -o acme --fields default,+priority,+labels --json
   $ jirallm search 'project = PROJ' -o acme --fields all --json
   $ jirallm search 'project = PROJ' -o acme --fields status --json   # narrow the rows
+  $ jirallm search 'parent in (PROJ-100, PROJ-200)' -o acme --json   # group children by row.parent.key
 `
   );
 

@@ -74,6 +74,25 @@ describe('projectIssueFields', () => {
     expect(projected.parent).toEqual({ key: 'PROJ-9', title: 'Parent task', status: 'To Do' });
   });
 
+  it('keeps the parent key when Jira returns no expanded fields member', () => {
+    const projected = projectIssueFields(
+      { parent: { id: '10001', key: 'PROJ-9', self: 'https://x/rest/api/3/issue/10001' } },
+      ['parent']
+    );
+    expect(projected.parent).toEqual({ key: 'PROJ-9', title: '', status: undefined });
+  });
+
+  it('tolerates a parent whose fields member is partial', () => {
+    const projected = projectIssueFields({ parent: { key: 'PROJ-9', fields: {} } }, ['parent']);
+    expect(projected.parent).toEqual({ key: 'PROJ-9', title: '', status: undefined });
+  });
+
+  it('omits parent when the raw value carries no usable key', () => {
+    for (const parent of [{}, { key: '' }, { key: 42 }, null]) {
+      expect(projectIssueFields({ parent }, ['parent'])).toEqual({});
+    }
+  });
+
   it('extracts the epic from the first matching epic-link custom field', () => {
     const projected = projectIssueFields(RAW_FIELDS, ALL_KEYS);
     expect(projected.epic).toEqual({ key: 'PROJ-2', title: 'The epic' });

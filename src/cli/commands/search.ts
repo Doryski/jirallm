@@ -29,6 +29,8 @@ export type SearchRow = Partial<Omit<JiraTaskData, 'key' | 'title'>> & {
 
 const PROJECTABLE_FIELD_SET: ReadonlySet<string> = new Set(PROJECTABLE_FIELDS);
 
+const parentSuffix = (parent: SearchRow['parent']) => (parent?.key ? ` parent: ${parent.key}` : '');
+
 const isPresent = (value: unknown) => {
   if (value === undefined || value === null || value === '') return false;
   return !(Array.isArray(value) && value.length === 0);
@@ -125,7 +127,9 @@ export async function runSearch(opts: SearchOptions): Promise<void> {
   console.log(`${rows.length} issue(s):`);
   for (const r of rows) {
     const assignee = r.assignee ? ` [${r.assignee}]` : '';
-    console.log(`  ${r.key}  ${r.summary}  (${r.status ?? 'Unknown'})${assignee}`);
+    console.log(
+      `  ${r.key}  ${r.summary}  (${r.status ?? 'Unknown'})${assignee}${parentSuffix(r.parent)}`
+    );
   }
   if (!page.isLast && page.nextPageToken) {
     console.log(`\nMore results — pass --cursor ${page.nextPageToken}`);

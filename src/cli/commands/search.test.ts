@@ -50,13 +50,24 @@ const SAMPLE_ISSUES = [
       duedate: '2026-08-01',
       environment: 'staging',
       customfield_10050: { value: 'Platform' },
+      parent: { key: 'PROJ-9', fields: { summary: 'Parent task', status: { name: 'To Do' } } },
     },
   },
   {
     key: 'PROJ-2',
     fields: { summary: 'two', status: { name: 'Done' } },
   },
-];
+] as const;
+
+const childOf = (key: string, parentKey: string) =>
+  ({
+    key,
+    fields: {
+      summary: `child ${key}`,
+      status: { name: 'Open' },
+      parent: { key: parentKey, fields: { summary: `epic ${parentKey}`, status: { name: 'Open' } } },
+    },
+  }) as const;
 
 const runJsonSearch = async (opts: Parameters<typeof runSearch>[0]) => {
   Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
@@ -124,6 +135,7 @@ describe('runSearch', () => {
       status: 'Open',
       assignee: 'Jane',
       issueType: 'Task',
+      parent: { key: 'PROJ-9', title: 'Parent task', status: 'To Do' },
     });
     expect(parsed.issues[1]).toEqual({ key: 'PROJ-2', summary: 'two', status: 'Done' });
     expect(parsed.nextPageToken).toBe('next-token');
@@ -205,6 +217,88 @@ describe('runSearch', () => {
     expect(parsed.issues[0]).toEqual({ key: 'PROJ-1', summary: 'one', status: 'Open' });
   });
 
+  it('requests parent by default and carries it as {key, title, status} in the rows', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    const parsed = await runJsonSearch({ jql: 'x', json: true });
+    expect(searchIssuesMock.mock.calls[0][1].fields).toContain('parent');
+    expect(parsed.issues[0].parent).toEqual({
+      key: 'PROJ-9',
+      title: 'Parent task',
+      status: 'To Do',
+    });
+  });
+
+  it('groups a page of children into a parent → children map (issue #21)', async () => {
+    searchIssuesMock.mockResolvedValue({
+      issues: [
+        childOf('PROJ-101', 'PROJ-100'),
+        childOf('PROJ-201', 'PROJ-200'),
+        childOf('PROJ-102', 'PROJ-100'),
+        childOf('PROJ-301', 'PROJ-300'),
+      ],
+      isLast: true,
+    });
+    const parsed = await runJsonSearch({
+      jql: 'parent in (PROJ-100, PROJ-200, PROJ-300)',
+      json: true,
+    });
+    const grouped = parsed.issues.reduce(
+      (acc: Record<string, string[]>, row: { key: string; parent?: { key: string } }) => {
+        const parentKey = row.parent?.key ?? 'orphan';
+        acc[parentKey] = [...(acc[parentKey] ?? []), row.key];
+        return acc;
+      },
+      {}
+    );
+    expect(grouped).toEqual({
+      'PROJ-100': ['PROJ-101', 'PROJ-102'],
+      'PROJ-200': ['PROJ-201'],
+      'PROJ-300': ['PROJ-301'],
+    });
+  });
+
+  it('omits parent entirely for an issue that has none', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    const parsed = await runJsonSearch({ jql: 'x', json: true });
+    expect('parent' in parsed.issues[1]).toBe(false);
+    expect(parsed.issues[1]).toEqual({ key: 'PROJ-2', summary: 'two', status: 'Done' });
+  });
+
+  it('drops parent from the requested IDs and the rows on --fields -parent', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    const parsed = await runJsonSearch({ jql: 'x', json: true, fields: '-parent' });
+    expect(searchIssuesMock.mock.calls[0][1].fields).not.toContain('parent');
+    expect(new Set(resolveSearchFields('-parent').friendlyKeys)).toEqual(
+      new Set(SEARCH_DEFAULT_KEYS.filter((key) => key !== 'parent'))
+    );
+    expect('parent' in parsed.issues[0]).toBe(false);
+  });
+
+  it('renders every row when one of them carries a parent with no expanded fields', async () => {
+    searchIssuesMock.mockResolvedValue({
+      issues: [
+        childOf('PROJ-101', 'PROJ-100'),
+        { key: 'PROJ-102', fields: { summary: 'restricted', parent: { key: 'PROJ-200' } } },
+        childOf('PROJ-103', 'PROJ-100'),
+      ],
+      isLast: true,
+    });
+    const parsed = await runJsonSearch({ jql: 'x', json: true });
+    expect(parsed.issues.map((row: { key: string }) => row.key)).toEqual([
+      'PROJ-101',
+      'PROJ-102',
+      'PROJ-103',
+    ]);
+    expect(parsed.issues[1].parent).toEqual({ key: 'PROJ-200', title: '' });
+  });
+
+  it('never includes parent for a narrowing selector', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    const parsed = await runJsonSearch({ jql: 'x', json: true, fields: 'summary,status' });
+    expect(searchIssuesMock.mock.calls[0][1].fields).not.toContain('parent');
+    expect('parent' in parsed.issues[0]).toBe(false);
+  });
+
   it('resolves sprint/story-point field IDs only when those keys are selected', async () => {
     searchIssuesMock.mockResolvedValue({ issues: [], isLast: true });
     await runJsonSearch({ jql: 'x', json: true });
@@ -247,6 +341,15 @@ describe('runSearch', () => {
     expect(out).toContain('PROJ-1');
     expect(out).toMatch(/PROJ-1.*\(Open\)/);
     expect(out).toMatch(/PROJ-2.*\(Done\)/);
+  });
+
+  it('appends the parent key to the human-readable row only when the issue has a parent', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runSearch({ jql: 'x' });
+    const [first, second] = logs.filter((line) => line.includes('PROJ-'));
+    expect(first).toContain('parent: PROJ-9');
+    expect(second).not.toContain('parent:');
   });
 
   it('prints cursor hint when more results available + TTY', async () => {

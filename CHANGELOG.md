@@ -8,6 +8,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `search` now includes `parent` in its default field set (#21): every row carries the same
+  normalised `{ key, title, status }` object `fetch` returns (omitted when the issue has no parent),
+  so a `parent in (A, B, C)` query groups into a parent → children map without an extra `fetch` per
+  child. Drop it with `--fields -parent`; a narrowing selector like `--fields summary,status` omits
+  it. Human-readable output labels the parent key on each line when present.
+- `ParentRef` is now a public type export (used by `JiraTaskData.parent` and
+  `JiraTaskSummary.parent`).
 - `users <query>` (alias `user`): resolve any Jira user to their `accountId` by email, display name
   or accountId prefix — no more `assign --dry-run` detour. Supports `-P/--project` and
   `--issue` to restrict results to assignable users, `--limit`, and `me` as a query shorthand.

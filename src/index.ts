@@ -21,6 +21,7 @@ export type {
   JiraPage,
   JqlIssue,
   IssueLinkSummary,
+  ParentRef,
   TimeTrackingSummary,
   FetchIssueDetailsOptions,
 } from './lib/jiraClient.js';

@@ -1,5 +1,10 @@
 import type { CustomFieldDefs } from './exportFields.js';
-import type { IssueLinkSummary, JiraTaskData, TimeTrackingSummary } from './jiraClient.js';
+import type {
+  IssueLinkSummary,
+  JiraTaskData,
+  ParentRef,
+  TimeTrackingSummary,
+} from './jiraClient.js';
 
 export const COMMON_EPIC_FIELDS = [
   'customfield_10014',
@@ -131,12 +136,17 @@ const isoString = (raw: unknown) => (typeof raw === 'string' ? raw : undefined);
 
 const nonEmptyString = (raw: unknown) => (typeof raw === 'string' && raw ? raw : undefined);
 
-const extractParent = (raw: unknown) => {
+const extractParent = (raw: unknown): ParentRef | undefined => {
   const parent = raw as
-    | { key: string; fields: { summary: string; status?: { name: string } } }
+    | { key?: unknown; fields?: { summary?: unknown; status?: unknown } }
     | undefined;
-  if (!parent) return undefined;
-  return { key: parent.key, title: parent.fields.summary, status: parent.fields.status?.name };
+  const key = nonEmptyString(parent?.key);
+  if (!key) return undefined;
+  return {
+    key,
+    title: nonEmptyString(parent?.fields?.summary) ?? '',
+    status: nameOf(parent?.fields?.status),
+  };
 };
 
 const extractTimeTracking = (raw: unknown): TimeTrackingSummary | undefined => {

@@ -213,6 +213,27 @@ describe('resolveFieldSet options', () => {
     expect(new Set(r.friendlyKeys)).toEqual(new Set(PRESETS.default));
   });
 
+  it('widens beyond defaultKeys when a selector names the "default" preset explicitly', () => {
+    const r = resolveFieldSet(parseFieldsFlag('default,-parent'), {}, {
+      alwaysFetch: SEARCH_ALWAYS_FETCH,
+      defaultKeys: SEARCH_DEFAULT_KEYS,
+    });
+    expect(new Set(r.friendlyKeys)).toEqual(
+      new Set(PRESETS.default.filter((key) => key !== 'parent'))
+    );
+    expect(r.friendlyKeys.length).toBeGreaterThan(SEARCH_DEFAULT_KEYS.length);
+  });
+
+  it('subtracts from defaultKeys for a bare exclude-only selector', () => {
+    const r = resolveFieldSet(parseFieldsFlag('-parent'), {}, {
+      alwaysFetch: SEARCH_ALWAYS_FETCH,
+      defaultKeys: SEARCH_DEFAULT_KEYS,
+    });
+    expect(new Set(r.friendlyKeys)).toEqual(
+      new Set(SEARCH_DEFAULT_KEYS.filter((key) => key !== 'parent'))
+    );
+  });
+
   it('keeps custom-field and pseudo-ID semantics with options supplied', () => {
     const defs: CustomFieldDefs = { severity: { id: 'customfield_99999', type: 'select' } };
     const r = resolveFieldSet(
