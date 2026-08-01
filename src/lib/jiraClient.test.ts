@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { JiraClient } from './jiraClient.js';
+import { JiraApiError, JiraClient, isJiraApiError } from './jiraClient.js';
 
 const FAKE_CONFIG = {
   baseUrl: 'https://example.atlassian.net',
@@ -1164,5 +1164,122 @@ describe('JiraClient.fetchIssueRaw', () => {
     expect(result.renderedFields).toEqual({ description: '<p>x</p>' });
     const url = (vi.mocked(fetchMock).mock.calls[0][0] as string) ?? '';
     expect(decodeURIComponent(url)).toContain('expand=names,renderedFields');
+  });
+});
+
+describe('JiraApiError', () => {
+  const installErrorWithHeaders = (
+    status: number,
+    statusText: string,
+    text: string,
+    headers: Record<string, string>
+  ): void => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          ({
+            ok: false,
+            status,
+            statusText,
+            text: async () => text,
+            headers: new Headers(headers),
+            url: 'https://example.atlassian.net/rest/api/3/myself',
+          }) as unknown as Response
+      )
+    );
+  };
+
+  it('keeps the legacy message while carrying status, body and headers', async () => {
+    installErrorWithHeaders(429, 'Too Many Requests', 'slow down', {
+      'Retry-After': '3',
+    });
+    const client = new JiraClient(FAKE_CONFIG, 'token');
+
+    const error = await client.getCurrentUser().catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(JiraApiError);
+    expect(JiraApiError.isJiraApiError(error)).toBe(true);
+    expect(isJiraApiError(error)).toBe(true);
+    const jiraError = error as JiraApiError;
+    expect(jiraError.message).toBe('Jira API request failed: 429 Too Many Requests\nslow down');
+    expect(jiraError.name).toBe('JiraApiError');
+    expect(jiraError.status).toBe(429);
+    expect(jiraError.statusText).toBe('Too Many Requests');
+    expect(jiraError.body).toBe('slow down');
+    expect(jiraError.headers['retry-after']).toBe('3');
+    expect(jiraError.retryAfterSeconds).toBe(3);
+  });
+
+  it('exposes the captcha denial header and lowercases header names', async () => {
+    installErrorWithHeaders(403, 'Forbidden', 'nope', {
+      'X-Authentication-Denied-Reason': 'CAPTCHA_CHALLENGE; login-url=https://id.atlassian.com',
+    });
+    const client = new JiraClient(FAKE_CONFIG, 'token');
+
+    const error = (await client.getCurrentUser().catch((e: unknown) => e)) as JiraApiError;
+
+    expect(error.deniedReason).toBe('CAPTCHA_CHALLENGE; login-url=https://id.atlassian.com');
+    expect(error.headers['x-authentication-denied-reason']).toBeDefined();
+  });
+
+  it('parses errorMessages and field errors out of a JSON body', async () => {
+    installErrorWithHeaders(
+      400,
+      'Bad Request',
+      JSON.stringify({ errorMessages: ['Field bad.'], errors: { jql: 'Unable to parse.' } }),
+      {}
+    );
+    const client = new JiraClient(FAKE_CONFIG, 'token');
+
+    const error = (await client.getCurrentUser().catch((e: unknown) => e)) as JiraApiError;
+
+    expect(error.errorMessages).toEqual(['Field bad.', 'Unable to parse.']);
+    expect(error.firstErrorMessage).toBe('Field bad.');
+  });
+
+  it('leaves errorMessages undefined for a non-JSON body', () => {
+    const error = new JiraApiError('boom', {
+      status: 500,
+      statusText: 'Server Error',
+      body: '<html>oops</html>',
+      headers: {},
+    });
+
+    expect(error.errorMessages).toBeUndefined();
+    expect(error.firstErrorMessage).toBeUndefined();
+    expect(error.retryAfterSeconds).toBeUndefined();
+    expect(error.deniedReason).toBeUndefined();
+  });
+
+  it('accepts an HTTP-date Retry-After', () => {
+    const error = new JiraApiError('boom', {
+      status: 429,
+      statusText: 'Too Many Requests',
+      body: '',
+      headers: { 'retry-after': new Date(Date.now() + 120_000).toUTCString() },
+    });
+
+    expect(error.retryAfterSeconds).toBeGreaterThan(110);
+    expect(error.retryAfterSeconds).toBeLessThanOrEqual(120);
+  });
+
+  it('recognises a structurally identical error from another bundled copy', () => {
+    const foreign = Object.assign(new Error('Jira API request failed: 401 Unauthorized\nx'), {
+      isJiraApiError: true,
+      status: 401,
+      statusText: 'Unauthorized',
+      body: 'x',
+      headers: {},
+    });
+
+    expect(foreign instanceof JiraApiError).toBe(false);
+    expect(JiraApiError.isJiraApiError(foreign)).toBe(true);
+  });
+
+  it('rejects look-alikes that are not errors', () => {
+    expect(JiraApiError.isJiraApiError({ isJiraApiError: true, status: 401 })).toBe(false);
+    expect(JiraApiError.isJiraApiError(new Error('plain'))).toBe(false);
+    expect(JiraApiError.isJiraApiError(undefined)).toBe(false);
   });
 });

@@ -1,5 +1,6 @@
-export { JiraClient } from './lib/jiraClient.js';
+export { JiraClient, JiraApiError, isJiraApiError } from './lib/jiraClient.js';
 export type {
+  JiraApiErrorInit,
   JiraConfig,
   JiraTaskData,
   JiraTaskSummary,

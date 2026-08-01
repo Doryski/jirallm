@@ -378,6 +378,140 @@ function extractCustomFieldValue(raw: unknown, type: string): unknown {
   }
 }
 
+export type JiraApiErrorInit = {
+  status: number;
+  statusText: string;
+  body: string;
+  headers: Record<string, string>;
+  url?: string;
+};
+
+// Tolerates responses that are not real `Response` objects (test doubles,
+// proxies) — a missing header bag must never mask the underlying HTTP error.
+const headersToRecord = (headers: Headers | undefined): Record<string, string> => {
+  const record: Record<string, string> = {};
+  if (typeof headers?.forEach !== 'function') return record;
+  headers.forEach((value, key) => {
+    record[key.toLowerCase()] = value;
+  });
+  return record;
+};
+
+const parseErrorMessages = (body: string): string[] | undefined => {
+  try {
+    const parsed: unknown = JSON.parse(body);
+    if (!parsed || typeof parsed !== 'object') return undefined;
+    const { errorMessages, errors } = parsed as {
+      errorMessages?: unknown;
+      errors?: unknown;
+    };
+    const fromArray = Array.isArray(errorMessages)
+      ? errorMessages.filter((entry): entry is string => typeof entry === 'string')
+      : [];
+    const fromFields =
+      errors && typeof errors === 'object'
+        ? Object.values(errors as Record<string, unknown>).filter(
+            (entry): entry is string => typeof entry === 'string'
+          )
+        : [];
+    const all = [...fromArray, ...fromFields];
+    return all.length > 0 ? all : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * Thrown for every non-2xx Jira response. Extends `Error` with a byte-identical
+ * `message` to the plain errors this client used to throw, so string-matching
+ * consumers keep working, while exposing the response data they previously had
+ * no way to read — notably `retry-after` and `x-authentication-denied-reason`.
+ *
+ * `headers` is a plain lowercase-keyed record rather than a `Headers` instance:
+ * consumers frequently bundle this package (esbuild `noExternal`) or cross an
+ * ESM/CJS boundary, and a POJO survives that, structured cloning and JSON
+ * serialisation, whereas a `Headers` realm mismatch does not.
+ */
+export class JiraApiError extends Error {
+  /** Duck-type brand — reliable where `instanceof` is not (bundled/duplicated copies). */
+  readonly isJiraApiError = true as const;
+  readonly status: number;
+  readonly statusText: string;
+  readonly body: string;
+  readonly headers: Record<string, string>;
+  readonly errorMessages?: string[];
+  readonly url?: string;
+
+  constructor(message: string, init: JiraApiErrorInit) {
+    super(message);
+    // `instanceof` across a bundle boundary is unreliable, and transpiled
+    // `extends Error` can lose the prototype entirely — pin it explicitly.
+    Object.setPrototypeOf(this, JiraApiError.prototype);
+    this.name = 'JiraApiError';
+    this.status = init.status;
+    this.statusText = init.statusText;
+    this.body = init.body;
+    this.headers = init.headers;
+    this.url = init.url;
+    this.errorMessages = parseErrorMessages(init.body);
+  }
+
+  /** First message Jira itself reported, if its error body was JSON. */
+  get firstErrorMessage(): string | undefined {
+    return this.errorMessages?.[0];
+  }
+
+  /** `Retry-After` in seconds, accepting both the delta and HTTP-date forms. */
+  get retryAfterSeconds(): number | undefined {
+    const raw = this.headers['retry-after'];
+    if (!raw) return undefined;
+    const seconds = Number(raw);
+    if (Number.isFinite(seconds) && seconds >= 0) return seconds;
+    const asDate = Date.parse(raw);
+    if (Number.isNaN(asDate)) return undefined;
+    return Math.max(0, Math.round((asDate - Date.now()) / 1000));
+  }
+
+  /**
+   * Atlassian's captcha challenge header — the only signal telling a user they
+   * must log into Jira in a browser once before the API will answer again.
+   */
+  get deniedReason(): string | undefined {
+    return this.headers['x-authentication-denied-reason'];
+  }
+
+  /**
+   * Structural check that works across duplicated/bundled copies of this class,
+   * where `instanceof` silently returns false.
+   */
+  static isJiraApiError(error: unknown): error is JiraApiError {
+    return (
+      error instanceof Error &&
+      (error as Partial<JiraApiError>).isJiraApiError === true &&
+      typeof (error as Partial<JiraApiError>).status === 'number'
+    );
+  }
+
+  /** Consumes the response body and builds the error with the legacy message. */
+  static async fromResponse(response: Response, prefix: string): Promise<JiraApiError> {
+    const body = await response.text();
+    return new JiraApiError(
+      `${prefix}: ${response.status} ${response.statusText}\n${body}`,
+      {
+        status: response.status,
+        statusText: response.statusText,
+        body,
+        headers: headersToRecord(response.headers),
+        url: response.url || undefined,
+      }
+    );
+  }
+}
+
+/** Standalone form of {@link JiraApiError.isJiraApiError}, for `import { isJiraApiError }`. */
+export const isJiraApiError = (error: unknown): error is JiraApiError =>
+  JiraApiError.isJiraApiError(error);
+
 const COMMON_EPIC_FIELDS = [
   'customfield_10014',
   'customfield_10008',
@@ -676,10 +810,7 @@ export class JiraClient {
     });
 
     if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(
-        `Jira API request failed: ${response.status} ${response.statusText}\n${errorText}`
-      );
+      throw await JiraApiError.fromResponse(response, 'Jira API request failed');
     }
 
     return response.json() as Promise<T>;
@@ -1034,10 +1165,7 @@ export class JiraClient {
       body: JSON.stringify(payload),
     });
     if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(
-        `Jira addComment failed: ${response.status} ${response.statusText}\n${errorText}`
-      );
+      throw await JiraApiError.fromResponse(response, 'Jira addComment failed');
     }
     const json = (await response.json()) as { id: string };
     return { id: json.id };
@@ -1063,10 +1191,7 @@ export class JiraClient {
       body: JSON.stringify(payload),
     });
     if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(
-        `Jira addWorklog failed: ${response.status} ${response.statusText}\n${errorText}`
-      );
+      throw await JiraApiError.fromResponse(response, 'Jira addWorklog failed');
     }
     const json = (await response.json()) as { id: string; issueId: string };
     return { id: json.id, issueId: json.issueId };
@@ -1084,10 +1209,7 @@ export class JiraClient {
       body: JSON.stringify({ body: wikiBody }),
     });
     if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(
-        `Jira updateComment failed: ${response.status} ${response.statusText}\n${errorText}`
-      );
+      throw await JiraApiError.fromResponse(response, 'Jira updateComment failed');
     }
   }
 
@@ -1103,10 +1225,7 @@ export class JiraClient {
       body: JSON.stringify({ body: adf }),
     });
     if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(
-        `Jira updateCommentAdf failed: ${response.status} ${response.statusText}\n${errorText}`
-      );
+      throw await JiraApiError.fromResponse(response, 'Jira updateCommentAdf failed');
     }
   }
 
@@ -1129,10 +1248,7 @@ export class JiraClient {
       body: JSON.stringify({ fields: { description: adf } }),
     });
     if (!response.ok && response.status !== 204) {
-      const errorText = await response.text();
-      throw new Error(
-        `Jira updateIssueDescriptionAdf failed: ${response.status} ${response.statusText}\n${errorText}`
-      );
+      throw await JiraApiError.fromResponse(response, 'Jira updateIssueDescriptionAdf failed');
     }
   }
 
@@ -1143,10 +1259,7 @@ export class JiraClient {
       headers: { Authorization: this.authHeader, Accept: 'application/json' },
     });
     if (!response.ok && response.status !== 204) {
-      const errorText = await response.text();
-      throw new Error(
-        `Jira deleteComment failed: ${response.status} ${response.statusText}\n${errorText}`
-      );
+      throw await JiraApiError.fromResponse(response, 'Jira deleteComment failed');
     }
   }
 
@@ -1162,10 +1275,7 @@ export class JiraClient {
       },
     });
     if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(
-        `Jira Agile API request failed: ${response.status} ${response.statusText}\n${errorText}`
-      );
+      throw await JiraApiError.fromResponse(response, 'Jira Agile API request failed');
     }
     return response.json() as Promise<T>;
   }
@@ -1409,10 +1519,7 @@ export class JiraClient {
       body: JSON.stringify({ transition: { id: match.id } }),
     });
     if (!response.ok && response.status !== 204) {
-      const errorText = await response.text();
-      throw new Error(
-        `Jira transition failed: ${response.status} ${response.statusText}\n${errorText}`
-      );
+      throw await JiraApiError.fromResponse(response, 'Jira transition failed');
     }
     return { name: match.name, id: match.id };
   }
@@ -1458,10 +1565,7 @@ export class JiraClient {
       body: JSON.stringify({ fields }),
     });
     if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(
-        `Jira createIssue failed: ${response.status} ${response.statusText}\n${errorText}`
-      );
+      throw await JiraApiError.fromResponse(response, 'Jira createIssue failed');
     }
     return response.json() as Promise<{ id: string; key: string; self: string }>;
   }
@@ -1515,10 +1619,7 @@ export class JiraClient {
       body: JSON.stringify({ fields }),
     });
     if (!response.ok && response.status !== 204) {
-      const errorText = await response.text();
-      throw new Error(
-        `Jira editIssue failed: ${response.status} ${response.statusText}\n${errorText}`
-      );
+      throw await JiraApiError.fromResponse(response, 'Jira editIssue failed');
     }
   }
 
@@ -1534,10 +1635,7 @@ export class JiraClient {
       body: JSON.stringify({ accountId: accountIdOrNull }),
     });
     if (!response.ok && response.status !== 204) {
-      const errorText = await response.text();
-      throw new Error(
-        `Jira assignIssue failed: ${response.status} ${response.statusText}\n${errorText}`
-      );
+      throw await JiraApiError.fromResponse(response, 'Jira assignIssue failed');
     }
   }
 
@@ -1564,10 +1662,7 @@ export class JiraClient {
       body: JSON.stringify(payload),
     });
     if (!response.ok && response.status !== 201) {
-      const errorText = await response.text();
-      throw new Error(
-        `Jira linkIssues failed: ${response.status} ${response.statusText}\n${errorText}`
-      );
+      throw await JiraApiError.fromResponse(response, 'Jira linkIssues failed');
     }
   }
 
@@ -1578,10 +1673,7 @@ export class JiraClient {
       headers: { Authorization: this.authHeader, Accept: 'application/json' },
     });
     if (!response.ok && response.status !== 204) {
-      const errorText = await response.text();
-      throw new Error(
-        `Jira removeIssueLink failed: ${response.status} ${response.statusText}\n${errorText}`
-      );
+      throw await JiraApiError.fromResponse(response, 'Jira removeIssueLink failed');
     }
   }
 
@@ -1605,10 +1697,7 @@ export class JiraClient {
       body: JSON.stringify(accountId),
     });
     if (!response.ok && response.status !== 204) {
-      const errorText = await response.text();
-      throw new Error(
-        `Jira addWatcher failed: ${response.status} ${response.statusText}\n${errorText}`
-      );
+      throw await JiraApiError.fromResponse(response, 'Jira addWatcher failed');
     }
   }
 
@@ -1619,10 +1708,7 @@ export class JiraClient {
       headers: { Authorization: this.authHeader, Accept: 'application/json' },
     });
     if (!response.ok && response.status !== 204) {
-      const errorText = await response.text();
-      throw new Error(
-        `Jira removeWatcher failed: ${response.status} ${response.statusText}\n${errorText}`
-      );
+      throw await JiraApiError.fromResponse(response, 'Jira removeWatcher failed');
     }
   }
 
@@ -1644,10 +1730,7 @@ export class JiraClient {
       body: form,
     });
     if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(
-        `Jira uploadAttachment failed: ${response.status} ${response.statusText}\n${errorText}`
-      );
+      throw await JiraApiError.fromResponse(response, 'Jira uploadAttachment failed');
     }
     return response.json() as Promise<UploadedAttachment[]>;
   }
@@ -1682,10 +1765,7 @@ export class JiraClient {
       headers: { Authorization: this.authHeader, Accept: 'application/json' },
     });
     if (!response.ok && response.status !== 204) {
-      const errorText = await response.text();
-      throw new Error(
-        `Jira deleteAttachment failed: ${response.status} ${response.statusText}\n${errorText}`
-      );
+      throw await JiraApiError.fromResponse(response, 'Jira deleteAttachment failed');
     }
   }
 
@@ -1697,7 +1777,18 @@ export class JiraClient {
     });
 
     if (!response.ok) {
-      throw new Error(`Failed to download attachment: ${response.status} ${response.statusText}`);
+      // Body is intentionally not consumed here (it is the file stream), so the
+      // message keeps its historical shape without a trailing body section.
+      throw new JiraApiError(
+        `Failed to download attachment: ${response.status} ${response.statusText}`,
+        {
+          status: response.status,
+          statusText: response.statusText,
+          body: '',
+          headers: headersToRecord(response.headers),
+          url: response.url || undefined,
+        }
+      );
     }
     if (!response.body) throw new Error('Response body is null');
 
