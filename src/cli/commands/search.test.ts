@@ -141,6 +141,8 @@ import {
   SEARCH_DEFAULT_KEYS,
 } from '../../lib/exportFields.js';
 import { COMMON_EPIC_FIELDS } from '../../lib/fieldProjection.js';
+import { convertADFToMarkdown } from '../../lib/adfToMarkdown.js';
+import type { JiraADFDocument } from '../../lib/adfToMarkdown.js';
 
 const resolveSearchFields = (raw?: string) =>
   resolveFieldSet(raw ? parseFieldsFlag(raw) : undefined, {}, {
@@ -190,6 +192,120 @@ const ISSUE_WITH_LEGACY_EPIC = {
     customfield_10008: { key: 'PROJ-60', fields: { summary: 'Epic sixty' } },
   },
 } as const;
+
+const DESCRIPTION_ADF: JiraADFDocument = {
+  version: 1,
+  type: 'doc',
+  content: [
+    { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: 'Repro' }] },
+    {
+      type: 'paragraph',
+      content: [
+        { type: 'text', text: 'Run ' },
+        { type: 'text', text: 'jirallm search', marks: [{ type: 'code' }] },
+        { type: 'text', text: ' with ' },
+        { type: 'text', text: '--json', marks: [{ type: 'strong' }] },
+        { type: 'text', text: '.' },
+      ],
+    },
+    {
+      type: 'bulletList',
+      content: [
+        {
+          type: 'listItem',
+          content: [{ type: 'paragraph', content: [{ type: 'text', text: 'first' }] }],
+        },
+        {
+          type: 'listItem',
+          content: [{ type: 'paragraph', content: [{ type: 'text', text: 'second' }] }],
+        },
+      ],
+    },
+  ],
+};
+
+const DESCRIPTION_MARKDOWN = '## Repro\nRun `jirallm search` with **--json**.\n\n- first\n- second';
+
+const ISSUE_WITH_ADF_DESCRIPTION = {
+  key: 'PROJ-7',
+  fields: { summary: 'seven', status: { name: 'Open' }, description: DESCRIPTION_ADF },
+} as const;
+
+const ISSUE_WITH_WIKI_DESCRIPTION = {
+  key: 'PROJ-8',
+  fields: { summary: 'eight', status: { name: 'Open' }, description: 'h2. Repro\n* first' },
+} as const;
+
+const ATTACHMENT_ADF: JiraADFDocument = {
+  version: 1,
+  type: 'doc',
+  content: [
+    {
+      type: 'mediaSingle',
+      content: [{ type: 'media', attrs: { id: 'uuid-abc-123', type: 'file', collection: 'col' } }],
+    },
+    {
+      type: 'paragraph',
+      content: [
+        {
+          type: 'inlineCard',
+          attrs: { url: 'https://x/rest/api/3/attachment/content/10001' },
+        },
+      ],
+    },
+  ],
+};
+
+const RAW_ATTACHMENTS = [
+  {
+    id: '10001',
+    filename: 'screenshot.png',
+    content: 'https://x/rest/api/3/attachment/content/10001',
+    size: 4242,
+  },
+];
+
+const ATTACHMENT_METADATA = RAW_ATTACHMENTS.map(({ id, filename, content }) => ({
+  id,
+  filename,
+  url: content,
+}));
+
+const ISSUE_WITH_ATTACHMENT_DESCRIPTION = {
+  key: 'PROJ-13',
+  fields: {
+    summary: 'thirteen',
+    status: { name: 'Open' },
+    description: ATTACHMENT_ADF,
+    attachment: RAW_ATTACHMENTS,
+  },
+} as const;
+
+const EMPTY_ADF: JiraADFDocument = { version: 1, type: 'doc', content: [] };
+
+const ISSUE_WITH_EMPTY_ADF_DESCRIPTION = {
+  key: 'PROJ-14',
+  fields: { summary: 'fourteen', status: { name: 'Open' }, description: EMPTY_ADF },
+} as const;
+
+const UNVERSIONED_ADF: Omit<JiraADFDocument, 'version' | 'type'> = {
+  content: [{ type: 'paragraph', content: [{ type: 'text', text: 'hi' }] }],
+};
+
+const ISSUE_WITH_UNVERSIONED_ADF = {
+  key: 'PROJ-15',
+  fields: { summary: 'fifteen', status: { name: 'Open' }, description: UNVERSIONED_ADF },
+};
+
+const withDescriptionCustomField = () =>
+  loadOrgProfileMock.mockResolvedValueOnce({
+    config: { baseUrl: 'https://x', userEmail: 'u@x' },
+    org: {
+      name: 'acme',
+      export: { customFieldDefs: { description: { id: 'customfield_9999', type: 'scalar' } } },
+    },
+    apiToken: 'tok',
+  });
 
 const childOf = (key: string, parentKey: string) =>
   ({
@@ -887,6 +1003,281 @@ describe('runSearch', () => {
     expect(warn).not.toHaveBeenCalled();
     expect('subtasks' in parsed.issues[0]).toBe(false);
     expect('epic' in parsed.issues[0]).toBe(false);
+  });
+
+  it('renders an ADF description as a Markdown string, never the raw object (issue #26)', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: [ISSUE_WITH_ADF_DESCRIPTION], isLast: true });
+    const parsed = await runJsonSearch({ jql: 'x', json: true, fields: 'summary,description' });
+    const row = parsed.issues[0];
+    expect(typeof row.description).toBe('string');
+    expect(row.description).toBe(DESCRIPTION_MARKDOWN);
+    expect('descriptionAdf' in row).toBe(false);
+    expect(searchIssuesMock.mock.calls[0][1].fields).toContain('description');
+  });
+
+  it('matches the Markdown that fetch --json would render for the same ADF (issue #26)', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: [ISSUE_WITH_ADF_DESCRIPTION], isLast: true });
+    const parsed = await runJsonSearch({ jql: 'x', json: true, fields: 'summary,description' });
+    expect(parsed.issues[0].description).toBe(convertADFToMarkdown(DESCRIPTION_ADF));
+  });
+
+  it('exposes only descriptionAdf under --description-format adf (issue #26)', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: [ISSUE_WITH_ADF_DESCRIPTION], isLast: true });
+    const parsed = await runJsonSearch({
+      jql: 'x',
+      json: true,
+      fields: 'summary,description',
+      descriptionFormat: 'adf',
+    });
+    const row = parsed.issues[0];
+    expect('description' in row).toBe(false);
+    expect(row).toEqual({ key: 'PROJ-7', summary: 'seven', descriptionAdf: DESCRIPTION_ADF });
+  });
+
+  it('emits the Markdown string and the raw ADF under --description-format both (issue #26)', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: [ISSUE_WITH_ADF_DESCRIPTION], isLast: true });
+    const parsed = await runJsonSearch({
+      jql: 'x',
+      json: true,
+      fields: 'summary,description',
+      descriptionFormat: 'both',
+    });
+    const row = parsed.issues[0];
+    expect(typeof row.description).toBe('string');
+    expect(row).toEqual({
+      key: 'PROJ-7',
+      summary: 'seven',
+      description: DESCRIPTION_MARKDOWN,
+      descriptionAdf: DESCRIPTION_ADF,
+    });
+  });
+
+  it.each(['markdown', 'adf', 'both'] as const)(
+    'emits neither description key for an absent, null or empty description (--description-format "%s") (issue #26)',
+    async (descriptionFormat) => {
+      searchIssuesMock.mockResolvedValue({
+        issues: [
+          { key: 'PROJ-10', fields: { summary: 'ten' } },
+          { key: 'PROJ-11', fields: { summary: 'eleven', description: null } },
+          { key: 'PROJ-12', fields: { summary: 'twelve', description: '' } },
+        ],
+        isLast: true,
+      });
+      const parsed = await runJsonSearch({
+        jql: 'x',
+        json: true,
+        fields: 'summary,description',
+        descriptionFormat,
+      });
+      expect(parsed.issues).toEqual([
+        { key: 'PROJ-10', summary: 'ten' },
+        { key: 'PROJ-11', summary: 'eleven' },
+        { key: 'PROJ-12', summary: 'twelve' },
+      ]);
+    }
+  );
+
+  it('resolves media and attachment cards exactly as fetch does (issue #26 review F1)', async () => {
+    searchIssuesMock.mockResolvedValue({
+      issues: [ISSUE_WITH_ATTACHMENT_DESCRIPTION],
+      isLast: true,
+    });
+    const parsed = await runJsonSearch({ jql: 'x', json: true, fields: 'summary,description' });
+    const row = parsed.issues[0];
+    expect(row.description).toBe(convertADFToMarkdown(ATTACHMENT_ADF, ATTACHMENT_METADATA));
+    expect(row.description).toContain('![image](attachments/screenshot.png)');
+    expect(row.description).toContain('[screenshot.png](attachments/screenshot.png)');
+    expect(row.description).not.toBe(convertADFToMarkdown(ATTACHMENT_ADF));
+  });
+
+  it('requests attachment on the wire but never as a row key (issue #26 review F1)', async () => {
+    searchIssuesMock.mockResolvedValue({
+      issues: [ISSUE_WITH_ATTACHMENT_DESCRIPTION],
+      isLast: true,
+    });
+    const parsed = await runJsonSearch({ jql: 'x', json: true, fields: 'summary,description' });
+    expect(searchIssuesMock.mock.calls[0][1].fields).toContain('attachment');
+    expect('attachment' in parsed.issues[0]).toBe(false);
+  });
+
+  it('leaves attachment off the wire when description is not selected (issue #26 review F1)', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    await runJsonSearch({ jql: 'x', json: true, fields: 'summary,labels' });
+    expect(searchIssuesMock.mock.calls[0][1].fields).not.toContain('attachment');
+  });
+
+  it('ignores a malformed attachment field instead of throwing (issue #26 review F1)', async () => {
+    searchIssuesMock.mockResolvedValue({
+      issues: [
+        {
+          key: 'PROJ-16',
+          fields: {
+            summary: 'sixteen',
+            description: ATTACHMENT_ADF,
+            attachment: [null, 'nope', { id: 7, filename: 'x.png' }, { filename: 'y.png' }],
+          },
+        },
+        { key: 'PROJ-17', fields: { summary: 'seventeen', description: ATTACHMENT_ADF, attachment: 'nope' } },
+      ],
+      isLast: true,
+    });
+    const parsed = await runJsonSearch({ jql: 'x', json: true, fields: 'summary,description' });
+    for (const row of parsed.issues) {
+      expect(row.description).toBe(convertADFToMarkdown(ATTACHMENT_ADF));
+    }
+  });
+
+  it.each(['markdown', 'adf', 'both'] as const)(
+    'keeps description and descriptionAdf consistent for an empty ADF doc (--description-format "%s") (issue #26 review F3)',
+    async (descriptionFormat) => {
+      searchIssuesMock.mockResolvedValue({
+        issues: [ISSUE_WITH_EMPTY_ADF_DESCRIPTION],
+        isLast: true,
+      });
+      const parsed = await runJsonSearch({
+        jql: 'x',
+        json: true,
+        fields: 'summary,description',
+        descriptionFormat,
+      });
+      const row = parsed.issues[0];
+      expect('description' in row).toBe(descriptionFormat !== 'adf');
+      expect('descriptionAdf' in row).toBe(descriptionFormat !== 'markdown');
+      if (descriptionFormat !== 'adf') expect(row.description).toBe('');
+    }
+  );
+
+  it.each(['markdown', 'adf', 'both'] as const)(
+    'renders an ADF-shaped value that is not a doc as Markdown only (--description-format "%s") (issue #26 review F6)',
+    async (descriptionFormat) => {
+      searchIssuesMock.mockResolvedValue({ issues: [ISSUE_WITH_UNVERSIONED_ADF], isLast: true });
+      const parsed = await runJsonSearch({
+        jql: 'x',
+        json: true,
+        fields: 'summary,description',
+        descriptionFormat,
+      });
+      expect(parsed.issues[0]).toEqual({
+        key: 'PROJ-15',
+        summary: 'fifteen',
+        description: convertADFToMarkdown({ ...EMPTY_ADF, ...UNVERSIONED_ADF }),
+      });
+      expect(parsed.issues[0].description).toContain('hi');
+    }
+  );
+
+  it('rejects --description-format when the org config maps a custom field to description (issue #26 review F4)', async () => {
+    withDescriptionCustomField();
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    await expect(
+      runSearch({ jql: 'x', json: true, descriptionFormat: 'adf' })
+    ).rejects.toThrow(/Conflicting field `description`/);
+    expect(searchIssuesMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects an explicit --fields description when a custom field shadows it (issue #26 review F4)', async () => {
+    withDescriptionCustomField();
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    const err = await runSearch({ jql: 'x', json: true, fields: 'default,+description' }).catch(
+      (e: Error) => e
+    );
+    expect((err as Error).message).toContain('Conflicting field `description`');
+    expect((err as Error).message).toContain('Rename that custom-field key');
+    expect(searchIssuesMock).not.toHaveBeenCalled();
+  });
+
+  it('warns and carries on when the description override only arrives from the config (issue #26 review F4)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    withDescriptionCustomField();
+    searchIssuesMock.mockResolvedValue({ issues: [ISSUE_WITH_ADF_DESCRIPTION], isLast: true });
+    const parsed = await runJsonSearch({ jql: 'x', json: true });
+    expect(warn.mock.calls.flat().join('\n')).toContain('shadows the built-in issue description');
+    expect(searchIssuesMock.mock.calls[0][1].fields).toContain('customfield_9999');
+    expect(searchIssuesMock.mock.calls[0][1].fields).not.toContain('attachment');
+    expect('description' in parsed.issues[0]).toBe(false);
+    expect('descriptionAdf' in parsed.issues[0]).toBe(false);
+  });
+
+  it('reports the field-name casing, not an unused flag, for --fields +Description (issue #26 review F5)', async () => {
+    listFieldsMock.mockResolvedValue([
+      ...CATALOG,
+      { id: 'description', name: 'Description', custom: false },
+    ]);
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    const err = await runSearch({
+      jql: 'x',
+      json: true,
+      fields: 'summary,+Description',
+      descriptionFormat: 'adf',
+    }).catch((e: Error) => e);
+    expect((err as Error).message).toContain('"Description" → "description"');
+    expect((err as Error).message).not.toContain('Unused `--description-format`');
+  });
+
+  it.each(['markdown', 'adf', 'both'] as const)(
+    'passes a plain-string wiki description straight through (--description-format "%s") (issue #26)',
+    async (descriptionFormat) => {
+      searchIssuesMock.mockResolvedValue({ issues: [ISSUE_WITH_WIKI_DESCRIPTION], isLast: true });
+      const parsed = await runJsonSearch({
+        jql: 'x',
+        json: true,
+        fields: 'summary,description',
+        descriptionFormat,
+      });
+      const row = parsed.issues[0];
+      expect(typeof row.description).toBe('string');
+      expect(row).toEqual({
+        key: 'PROJ-8',
+        summary: 'eight',
+        description: 'h2. Repro\n* first',
+      });
+    }
+  );
+
+  it('rejects --description-format when description is not in the field set, before any request (issue #26)', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    await expect(
+      runSearch({ jql: 'x', json: true, fields: 'summary,status', descriptionFormat: 'adf' })
+    ).rejects.toThrow(
+      'Unused `--description-format`: the resolved field set has no `description`. `description` ' +
+        'is opt-in for `search` — name it explicitly, e.g. `--fields +description`, or drop ' +
+        '`--description-format`.'
+    );
+    expect(searchIssuesMock).not.toHaveBeenCalled();
+    expect(listFieldsMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects --description-format on a bare search that carries no description (issue #26)', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    await expect(runSearch({ jql: 'x', json: true, descriptionFormat: 'markdown' })).rejects.toThrow(
+      /Unused `--description-format`/
+    );
+    expect(searchIssuesMock).not.toHaveBeenCalled();
+  });
+
+  it('never asks Jira for the field catalog when description is named (issue #26)', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: [ISSUE_WITH_ADF_DESCRIPTION], isLast: true });
+    const parsed = await runJsonSearch({ jql: 'x', json: true, fields: 'default,+description' });
+    expect(listFieldsMock).not.toHaveBeenCalled();
+    expect(searchIssuesMock.mock.calls[0][1].fields).toContain('description');
+    expect(parsed.issues[0].description).toBe(DESCRIPTION_MARKDOWN);
+  });
+
+  it('leaves description out of a bare search, on the wire and in the rows (issue #26)', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: [ISSUE_WITH_ADF_DESCRIPTION], isLast: true });
+    const parsed = await runJsonSearch({ jql: 'x', json: true });
+    expect(searchIssuesMock.mock.calls[0][1].fields).not.toContain('description');
+    expect('description' in parsed.issues[0]).toBe(false);
+    expect('descriptionAdf' in parsed.issues[0]).toBe(false);
+  });
+
+  it('leaves description out of --fields all, on the wire and in the rows (issue #26)', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    searchIssuesMock.mockResolvedValue({ issues: [ISSUE_WITH_ADF_DESCRIPTION], isLast: true });
+    const parsed = await runJsonSearch({ jql: 'x', json: true, fields: 'all' });
+    expect(searchIssuesMock.mock.calls[0][1].fields).not.toContain('description');
+    expect('description' in parsed.issues[0]).toBe(false);
+    expect('descriptionAdf' in parsed.issues[0]).toBe(false);
   });
 
   it('prints cursor hint when more results available + TTY', async () => {

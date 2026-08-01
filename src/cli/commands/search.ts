@@ -17,6 +17,10 @@ import {
   projectIssueFields,
 } from '../../lib/fieldProjection.js';
 import type { ProjectionContext } from '../../lib/fieldProjection.js';
+import { convertADFToMarkdown } from '../../lib/adfToMarkdown.js';
+import type { JiraADFContent, JiraADFDocument } from '../../lib/adfToMarkdown.js';
+import { parseDescriptionFormat } from '../../lib/descriptionFormat.js';
+import type { DescriptionFormat } from '../../lib/descriptionFormat.js';
 import { printJson, shouldOutputJson } from '../jsonOutput.js';
 
 export type SearchOptions = {
@@ -26,15 +30,21 @@ export type SearchOptions = {
   cursor?: string;
   nextPageToken?: string;
   fields?: string;
+  descriptionFormat?: string;
   json?: boolean;
 };
 
 export type SearchRow = Partial<Omit<JiraTaskData, 'key' | 'title'>> & {
   key: string;
   summary: string;
+  descriptionAdf?: JiraADFDocument;
 } & Record<string, unknown>;
 
 const PROJECTABLE_FIELD_SET: ReadonlySet<string> = new Set(PROJECTABLE_FIELDS);
+
+const DESCRIPTION_KEY = 'description';
+const DESCRIPTION_ADF_KEY = 'descriptionAdf';
+const DESCRIPTION_ROW_KEYS: ReadonlySet<string> = new Set([DESCRIPTION_KEY, DESCRIPTION_ADF_KEY]);
 
 const parentSuffix = (parent: SearchRow['parent']) => (parent?.key ? ` parent: ${parent.key}` : '');
 
@@ -50,10 +60,96 @@ function passThroughRawFields(
 ): Record<string, unknown> {
   const extras: Record<string, unknown> = {};
   for (const key of selectedKeys) {
+    if (DESCRIPTION_ROW_KEYS.has(key)) continue;
     if (PROJECTABLE_FIELD_SET.has(key) || key in customFieldDefs) continue;
     if (isPresent(rawFields[key])) extras[key] = rawFields[key];
   }
   return extras;
+}
+
+const ATTACHMENT_FIELD_ID = 'attachment';
+
+type AttachmentMeta = { id: string; filename: string; url?: string };
+type RawAttachment = { id: string; filename: string } & Record<string, unknown>;
+
+const isRawAttachment = (value: unknown): value is RawAttachment => {
+  if (typeof value !== 'object' || value === null) return false;
+  if (!('id' in value) || typeof value.id !== 'string') return false;
+  return 'filename' in value && typeof value.filename === 'string';
+};
+
+const toAttachmentMeta = ({ id, filename, content }: RawAttachment): AttachmentMeta => ({
+  id,
+  filename,
+  url: typeof content === 'string' ? content : undefined,
+});
+
+function attachmentMetadata(rawFields: Record<string, unknown>): AttachmentMeta[] {
+  const raw = rawFields[ATTACHMENT_FIELD_ID];
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(isRawAttachment).map(toAttachmentMeta);
+}
+
+type AdfLike = { content: JiraADFContent[] };
+
+const isAdfLike = (value: unknown): value is AdfLike =>
+  typeof value === 'object' && value !== null && 'content' in value && Array.isArray(value.content);
+
+const isAdfDocument = (value: unknown): value is JiraADFDocument => {
+  if (!isAdfLike(value)) return false;
+  if (!('type' in value) || value.type !== 'doc') return false;
+  return 'version' in value && typeof value.version === 'number';
+};
+
+const renderAdf = (value: AdfLike, attachments: AttachmentMeta[]) =>
+  convertADFToMarkdown({ version: 1, type: 'doc', ...value }, attachments);
+
+function adfEntries(
+  raw: AdfLike,
+  format: DescriptionFormat,
+  attachments: AttachmentMeta[]
+): Partial<SearchRow> {
+  if (!isAdfDocument(raw)) return { description: renderAdf(raw, attachments) };
+  if (format === 'adf') return { descriptionAdf: raw };
+  const description = renderAdf(raw, attachments);
+  if (format === 'both') return { description, descriptionAdf: raw };
+  return { description };
+}
+
+function descriptionEntries(
+  raw: unknown,
+  format: DescriptionFormat,
+  attachments: AttachmentMeta[]
+): Partial<SearchRow> {
+  if (!isPresent(raw)) return {};
+  if (typeof raw === 'string') return { description: raw };
+  if (isAdfLike(raw)) return adfEntries(raw, format, attachments);
+  return { description: '' };
+}
+
+function formatDescriptionFormatUnusedError(): string {
+  return (
+    'Unused `--description-format`: the resolved field set has no `description`. `description` is ' +
+    'opt-in for `search` — name it explicitly, e.g. `--fields +description`, or drop ' +
+    '`--description-format`.'
+  );
+}
+
+function formatDescriptionOverriddenError(): string {
+  return (
+    'Conflicting field `description`: this org config maps a custom field to the key ' +
+    '`description` (`[orgs.<org>.export.custom_fields]`), which shadows the built-in issue ' +
+    'description, so `search` cannot render it. Rename that custom-field key in the org config ' +
+    '(e.g. to `descriptionText`), then re-run.'
+  );
+}
+
+function formatDescriptionOverriddenWarning(): string {
+  return (
+    'Warning: this org config maps a custom field to the key `description`, which shadows the ' +
+    'built-in issue description — rows carry that custom field under `customFields.description` ' +
+    'and no rendered description. Rename that custom-field key in the org config to free the name.'
+  );
 }
 
 type FieldCatalogEntry = { id: string; name?: string };
@@ -118,7 +214,7 @@ async function assertFieldsKnownToJira(
   customFieldDefs: CustomFieldDefs
 ): Promise<void> {
   const unknown = findUnknownFieldNames(includeOnly(selector), customFieldDefs).filter(
-    (name) => !WILDCARD_FIELD_ID_SET.has(name.toLowerCase())
+    (name) => !WILDCARD_FIELD_ID_SET.has(name.toLowerCase()) && name !== DESCRIPTION_KEY
   );
   if (unknown.length === 0) return;
 
@@ -155,8 +251,12 @@ const SUBTASKS_KEY = 'subtasks';
 
 const isSubtasksToken = (token: string) => token.trim().toLowerCase() === SUBTASKS_KEY;
 
-const isExplicitlyIncluded = (selector: FieldSelector | undefined) =>
-  Boolean(includeOnly(selector)?.include?.some(isSubtasksToken));
+const isDescriptionToken = (token: string) => token.trim().toLowerCase() === DESCRIPTION_KEY;
+
+const isExplicitlyIncluded = (
+  selector: FieldSelector | undefined,
+  matches: (token: string) => boolean
+) => Boolean(includeOnly(selector)?.include?.some(matches));
 
 const hasCustomOverride = (customFieldDefs: CustomFieldDefs, name: string) =>
   Object.hasOwn(customFieldDefs, name);
@@ -183,8 +283,37 @@ function assertSubtasksNotRequested(
   customFieldDefs: CustomFieldDefs
 ): void {
   if (hasCustomOverride(customFieldDefs, SUBTASKS_KEY)) return;
-  if (!isExplicitlyIncluded(selector)) return;
+  if (!isExplicitlyIncluded(selector, isSubtasksToken)) return;
   throw new Error(formatSubtasksUnsupportedError());
+}
+
+const descriptionIsOverridden = (customFieldDefs: CustomFieldDefs) =>
+  hasCustomOverride(customFieldDefs, DESCRIPTION_KEY);
+
+const descriptionExplicitlyRequested = (
+  selector: FieldSelector | undefined,
+  descriptionFormat: string | undefined
+) => descriptionFormat !== undefined || isExplicitlyIncluded(selector, isDescriptionToken);
+
+function assertDescriptionNotOverridden(
+  selector: FieldSelector | undefined,
+  customFieldDefs: CustomFieldDefs,
+  descriptionFormat: string | undefined
+): void {
+  if (!descriptionIsOverridden(customFieldDefs)) return;
+  if (!descriptionExplicitlyRequested(selector, descriptionFormat)) return;
+  throw new Error(formatDescriptionOverriddenError());
+}
+
+function assertDescriptionRequested(
+  descriptionFormat: string | undefined,
+  friendlyKeys: readonly string[],
+  selector: FieldSelector | undefined
+): void {
+  if (descriptionFormat === undefined) return;
+  if (friendlyKeys.includes(DESCRIPTION_KEY)) return;
+  if (isExplicitlyIncluded(selector, isDescriptionToken)) return;
+  throw new Error(formatDescriptionFormatUnusedError());
 }
 
 const leaksSubtasks = (names: readonly string[], customFieldDefs: CustomFieldDefs) =>
@@ -233,22 +362,40 @@ function withDiscoveredIds(
   return [...new Set([...jiraFieldIds, ...extra])];
 }
 
+const withAttachmentField = (jiraFieldIds: readonly string[], rendersDescription: boolean) =>
+  rendersDescription ? [...new Set([...jiraFieldIds, ATTACHMENT_FIELD_ID])] : [...jiraFieldIds];
+
+type RowContext = {
+  friendlyKeys: readonly string[];
+  ctx: ProjectionContext;
+  descriptionFormat: DescriptionFormat;
+  rendersDescription: boolean;
+};
+
 function buildRow(
   issue: { key: string; fields: Record<string, unknown> },
-  friendlyKeys: readonly string[],
-  ctx: ProjectionContext
+  { friendlyKeys, ctx, descriptionFormat, rendersDescription }: RowContext
 ): SearchRow {
+  const description = rendersDescription
+    ? descriptionEntries(
+        issue.fields.description,
+        descriptionFormat,
+        attachmentMetadata(issue.fields)
+      )
+    : {};
   const row: SearchRow = {
     key: issue.key,
     summary: (issue.fields.summary as string | undefined) ?? '',
     ...projectIssueFields(issue.fields, friendlyKeys, ctx),
     ...passThroughRawFields(issue.fields, friendlyKeys, ctx.customFieldDefs ?? {}),
+    ...description,
   };
   if (friendlyKeys.includes('status') && row.status === undefined) row.status = 'Unknown';
   return row;
 }
 
 export async function runSearch(opts: SearchOptions): Promise<void> {
+  const descriptionFormat = parseDescriptionFormat(opts.descriptionFormat);
   const profile = await loadOrgProfile({ org: opts.org });
   const client = new JiraClient(profile.config, profile.apiToken);
 
@@ -268,19 +415,34 @@ export async function runSearch(opts: SearchOptions): Promise<void> {
   const friendlyKeys = withoutSubtasks(resolved.friendlyKeys, customFieldDefs);
   const jiraFieldIds = withoutSubtasks(resolved.jiraFieldIds, customFieldDefs);
 
+  assertDescriptionNotOverridden(selector, customFieldDefs, opts.descriptionFormat);
+  if (descriptionIsOverridden(customFieldDefs)) {
+    console.warn(formatDescriptionOverriddenWarning());
+  }
+
+  assertDescriptionRequested(opts.descriptionFormat, friendlyKeys, selector);
+
   await assertFieldsKnownToJira(client, selector, customFieldDefs);
 
+  const rendersDescription =
+    friendlyKeys.includes(DESCRIPTION_KEY) && !descriptionIsOverridden(customFieldDefs);
   const ctx = await resolveProjectionContext(client, friendlyKeys, customFieldDefs);
   const limit = opts.limit ? parseInt(opts.limit, 10) : 50;
 
   const page = await client.searchIssues(opts.jql, {
-    fields: withDiscoveredIds(jiraFieldIds, friendlyKeys, ctx),
+    fields: withAttachmentField(
+      withDiscoveredIds(jiraFieldIds, friendlyKeys, ctx),
+      rendersDescription
+    ),
     limit,
     nextPageToken: opts.nextPageToken || opts.cursor,
   });
 
   const rows = page.issues.map((issue) =>
-    buildRow({ key: issue.key, fields: issue.fields as Record<string, unknown> }, friendlyKeys, ctx)
+    buildRow(
+      { key: issue.key, fields: issue.fields as Record<string, unknown> },
+      { friendlyKeys, ctx, descriptionFormat, rendersDescription }
+    )
   );
 
   if (shouldOutputJson(opts)) {

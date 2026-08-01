@@ -6,6 +6,56 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `search --description-format <markdown|adf|both>` chooses how an opt-in `description` is rendered
+  in the JSON rows (#26), defaulting to `markdown`. The lossless ADF document is exposed under a
+  separate `descriptionAdf` key, never under `description`: `adf` emits `descriptionAdf` only,
+  `both` emits both keys, `markdown` emits `description` only — all three from the same search
+  request, with no second call. A plain-string (wiki markup) description has no ADF document to
+  emit, so `adf` falls back to `description` for it. `description` stays opt-in and is absent from
+  every preset, `all` included, because the ADF is roughly 2.1x the size of the Markdown and would
+  land on every row of a 50-row page; name it explicitly with `--fields +description`. Naming it
+  costs no extra `GET /rest/api/3/field`, though another unknown token, a preset, or any of
+  `sprint` / `storyPoints` / `epic` in the same selector still pays for one. Passing
+  `--description-format` without `description` in the resolved field set is an error, as is naming
+  `description` when an org config maps a custom field to that key — see `README.md` for both.
+
+### Changed
+
+- `convertADFToMarkdown` moved out of the `JiraClient` class into a pure leaf module
+  (`src/lib/adfToMarkdown.ts`), so the search path can render descriptions without depending on the
+  client (#26). This is an internal refactor, not a breaking change:
+  `JiraClient.convertADFToMarkdown` is retained as a delegate and the published `./client` API
+  surface is unchanged.
+
+### Fixed
+
+- `search --json --fields "summary,description"` returned `description` as the raw Jira ADF object
+  while `fetch --json` returned the same field as a Markdown string (#26). One field name now has
+  one shape across both commands: on the search path `description` is always rendered to Markdown
+  through the same converter `fetch` uses, and `SearchRow['description']` — which type-checked as
+  `string | undefined` the whole time, so `.slice()` / `.toLowerCase()` compiled and then threw at
+  runtime — now matches the value actually emitted. The two renderings are byte-identical, embedded
+  media included: whenever `description` is in the resolved field set, `search` additionally
+  requests Jira's `attachment` field and derives the same attachment metadata `fetch` does, so a
+  `media` node comes out as `![image](attachments/screenshot.png)` on both paths. A search that
+  does not select `description` requests no extra field. `fetch` is unchanged — it already returned
+  Markdown, and `fetch --raw` already yields the ADF in a single request.
+- `search --fields +Description` (mis-cased) now reports the accurate alias diagnosis —
+  `"Description" → "description"` — instead of failing with the unused-`--description-format` error
+  when that flag was passed alongside it. `description` exempts itself from `search`'s raw-ID check
+  by exact spelling, so a mis-cased token falls through to the catalog check like any other display
+  name.
+- `convertADFToMarkdown` no longer throws on a malformed ADF node (#26). A `null`, `undefined` or
+  non-object entry in a `content` array, a node carrying no usable `type`, or a `content` property
+  that is not an array previously raised a `TypeError` that aborted the whole operation — a whole
+  page of issues for `search`, the whole issue for `fetch`. Malformed nodes are now skipped and
+  traversal continues with their siblings, and a document whose own `content` is missing or not an
+  array returns an empty string. Well-formed documents render exactly as before, including the
+  positional attachment fallback. This covers every caller: descriptions, comments and worklog
+  comments across `fetch`, `export`, `comment` and `search`.
+
 ## [0.13.0] - 2026-08-01
 
 ### Added

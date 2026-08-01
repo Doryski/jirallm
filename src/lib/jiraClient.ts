@@ -5,7 +5,11 @@ import { pipeline } from 'stream/promises';
 import type { CustomFieldDefs } from './exportFields.js';
 import { COMMON_EPIC_FIELDS, PROJECTABLE_FIELDS, projectIssueFields } from './fieldProjection.js';
 import type { AdfDocument } from './adfMedia.js';
+import { convertADFToMarkdown } from './adfToMarkdown.js';
+import type { JiraADFDocument } from './adfToMarkdown.js';
 import { markdownToWiki } from './markdownToWiki.js';
+
+export type { JiraADFDocument, JiraADFContent } from './adfToMarkdown.js';
 
 export type JiraConfig = {
   baseUrl: string;
@@ -21,32 +25,6 @@ export type JiraUser = {
   emailAddress?: string;
   active?: boolean;
   accountType?: string;
-};
-
-type JiraADFContent = {
-  type: string;
-  content?: JiraADFContent[];
-  text?: string;
-  marks?: Array<{
-    type: string;
-    attrs?: { href?: string; [key: string]: unknown };
-  }>;
-  attrs?: {
-    id?: string;
-    type?: string;
-    collection?: string;
-    url?: string;
-    alt?: string;
-    language?: string;
-    level?: number;
-    state?: string;
-  };
-};
-
-type JiraADFDocument = {
-  version: number;
-  type: string;
-  content: JiraADFContent[];
 };
 
 type JiraIssue = {
@@ -752,168 +730,7 @@ export class JiraClient {
     content: string | JiraADFDocument | null | undefined,
     attachments: Array<{ id: string; filename: string; url?: string }> = []
   ): string {
-    if (!content) return '';
-    if (typeof content === 'string') return content;
-
-    const filenameSet = new Set(attachments.map((att) => att.filename));
-    const altMatchedFilenames = new Set<string>();
-    const collectAltMatches = (node: JiraADFContent) => {
-      if ((node.type === 'media' || node.type === 'mediaInline') && node.attrs?.alt) {
-        if (filenameSet.has(node.attrs.alt)) altMatchedFilenames.add(node.attrs.alt);
-      }
-      node.content?.forEach(collectAltMatches);
-    };
-    content.content.forEach(collectAltMatches);
-    const unmatchedAttachments = attachments.filter(
-      (att) => !altMatchedFilenames.has(att.filename)
-    );
-
-    const formatMediaLink = (filename: string) => {
-      const isImage = /\.(png|jpg|jpeg|gif|svg|webp|bmp|ico)$/i.test(filename);
-      return isImage
-        ? `![image](attachments/${filename})`
-        : `[${filename}](attachments/${filename})`;
-    };
-
-    const applyMarks = (text: string, marks?: JiraADFContent['marks']) => {
-      if (!marks) return text;
-      for (const mark of marks) {
-        switch (mark.type) {
-          case 'code':
-            text = `\`${text}\``;
-            break;
-          case 'strong':
-            text = `**${text}**`;
-            break;
-          case 'em':
-            text = `*${text}*`;
-            break;
-          case 'strike':
-            text = `~~${text}~~`;
-            break;
-          case 'link':
-            if (mark.attrs?.href) text = `[${text}](${mark.attrs.href})`;
-            break;
-        }
-      }
-      return text;
-    };
-
-    const extractText = (node: JiraADFContent, isTopLevel = false, listIndex?: number): string => {
-      if ((node.type === 'media' || node.type === 'mediaInline') && node.attrs) {
-        const filename = node.attrs.alt;
-        if (filename && filenameSet.has(filename)) return formatMediaLink(filename);
-        if (unmatchedAttachments.length > 0) {
-          const att = unmatchedAttachments.shift()!;
-          return formatMediaLink(att.filename);
-        }
-        if (filename) return formatMediaLink(filename);
-        const mediaId = node.attrs.id;
-        return mediaId ? `![embedded media](media/${mediaId})` : '![embedded media]()';
-      }
-
-      if (node.type === 'mediaSingle' && node.content) {
-        return node.content.map((child) => extractText(child)).join('');
-      }
-
-      if (node.type === 'mediaGroup' && node.content) {
-        return node.content.map((child) => extractText(child)).join('\n');
-      }
-
-      if ((node.type === 'inlineCard' || node.type === 'blockCard') && node.attrs?.url) {
-        const matched = attachments.find((att) => att.url && node.attrs!.url!.includes(att.id));
-        if (matched) return `[${matched.filename}](attachments/${matched.filename})`;
-        return node.attrs.url;
-      }
-
-      if (node.type === 'hardBreak') return '\n';
-      if (node.type === 'rule') return '---';
-
-      if (node.text) return applyMarks(node.text, node.marks);
-
-      if (node.type === 'heading' && node.content) {
-        const level = node.attrs?.level ?? 1;
-        const childContent = node.content.map((child) => extractText(child)).join('');
-        return '#'.repeat(level) + ' ' + childContent;
-      }
-
-      if (node.type === 'codeBlock') {
-        const lang = node.attrs?.language ?? '';
-        const childContent = node.content?.map((child) => extractText(child)).join('') ?? '';
-        return '```' + lang + '\n' + childContent + '\n```';
-      }
-
-      if (node.type === 'blockquote' && node.content) {
-        const childContent = node.content.map((child) => extractText(child)).join('\n');
-        return childContent
-          .split('\n')
-          .map((line) => '> ' + line)
-          .join('\n');
-      }
-
-      if (node.type === 'bulletList' && node.content) {
-        return node.content.map((child) => extractText(child, false, -1)).join('\n');
-      }
-
-      if (node.type === 'orderedList' && node.content) {
-        return node.content.map((child, i) => extractText(child, false, i + 1)).join('\n');
-      }
-
-      if (node.type === 'listItem' && node.content) {
-        const prefix = listIndex !== undefined && listIndex > 0 ? `${listIndex}. ` : '- ';
-        const childContent = node.content.map((child) => extractText(child)).join('\n');
-        return prefix + childContent.replace(/\n$/, '');
-      }
-
-      if (node.type === 'taskList' && node.content) {
-        return node.content.map((child) => extractText(child)).join('\n');
-      }
-
-      if (node.type === 'taskItem') {
-        const checked = node.attrs?.state === 'DONE' ? 'x' : ' ';
-        const childContent = node.content?.map((child) => extractText(child)).join('') ?? '';
-        return `- [${checked}] ${childContent}`;
-      }
-
-      if (node.type === 'table' && node.content) {
-        const rows = node.content.filter((child) => child.type === 'tableRow');
-        if (rows.length === 0) return '';
-
-        const processRow = (row: JiraADFContent) => {
-          const cells =
-            row.content?.map((cell) => {
-              const cellText =
-                cell.content
-                  ?.map((child) => extractText(child))
-                  .join('')
-                  .replace(/\n$/g, '') ?? '';
-              return cellText;
-            }) ?? [];
-          return '| ' + cells.join(' | ') + ' |';
-        };
-
-        const headerRow = processRow(rows[0]);
-        const colCount = rows[0].content?.length ?? 0;
-        const separator = '| ' + Array(colCount).fill('---').join(' | ') + ' |';
-        const bodyRows = rows.slice(1).map(processRow);
-
-        return [headerRow, separator, ...bodyRows].join('\n');
-      }
-
-      if (node.type === 'tableRow' || node.type === 'tableCell' || node.type === 'tableHeader') {
-        return node.content?.map((child) => extractText(child)).join('') ?? '';
-      }
-
-      if (node.content) {
-        const childContent = node.content.map((child) => extractText(child)).join('');
-        if (isTopLevel && node.type === 'paragraph') return childContent + '\n';
-        return childContent;
-      }
-
-      return '';
-    };
-
-    return content.content.map((node) => extractText(node, true)).join('\n');
+    return convertADFToMarkdown(content, attachments);
   }
 
   private mergeHistory(

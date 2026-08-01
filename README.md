@@ -148,7 +148,7 @@ jirallm PROJ-7 --fields all                # explicit preset replaces the config
 jirallm PROJ-7 --fields "key,status"       # bare list replaces the configured base
 ```
 
-Only `+name` / `-name` adjustments compose; a bare comma list or an explicit preset in the flag replaces the config base outright. Valid names are the friendly field names, their raw-ID aliases (`duedate`, `issuelinks`), and any configured custom-field key — anything else is rejected with an error. Friendly names and raw-ID aliases are matched case-insensitively on both the add and the drop side, so `--fields "+Epic"`, `--fields "+STORYPOINTS"` and `--fields "minimal,-Subtasks"` all resolve. Configured custom-field keys are the exception: they are matched exactly as configured, so `--fields Team` against a configured `team` key is still reported as unknown. An unknown name coming from the config block is reported as a warning and skipped, so a stale config never blocks an export.
+Only `+name` / `-name` adjustments compose; a bare comma list or an explicit preset in the flag replaces the config base outright. Valid names are the friendly field names, their raw-ID aliases (`duedate`, `issuelinks`), and any configured custom-field key — anything else is rejected with an error. Friendly names and raw-ID aliases are matched case-insensitively on both the add and the drop side, so `--fields "+Epic"`, `--fields "+STORYPOINTS"` and `--fields "minimal,-Subtasks"` all resolve. Configured custom-field keys are the exception: they are matched exactly as configured, so `--fields Team` against a configured `team` key is still reported as unknown. An unknown name coming from the config block is reported as a warning and skipped, so a stale config never blocks an export. `description` is not one of those names here — `fetch` and `export` always carry it, rendered to Markdown — but it is an opt-in `--fields` name on `search`; see the table below.
 
 #### What each command can project
 
@@ -161,8 +161,16 @@ Only `+name` / `-name` adjustments compose; a bare comma list or an explicit pre
 | `sprint` | Yes — custom-field ID from the org override, else auto-detected | Yes — same resolution |
 | `storyPoints` | Yes — custom-field ID from the org override, else auto-detected | Yes — same resolution |
 | `parent` | Yes — always requested | Yes — in the default set; drop it with `--fields -parent` |
+| `description` | Yes — always present in `fetch --json` as Markdown; not a `--fields` name here (`fetch --raw` returns the untouched ADF in the same request) | Opt-in — no preset carries it, not even `all`; name it explicitly (`--fields +description`). Rendered to Markdown through the same converter `fetch` uses, so it is always a string, never ADF, and byte-identical to `fetch --json`'s, media included. `--description-format adf` / `both` adds the lossless ADF under a separate `descriptionAdf` key, from the same request. Specifics below the table |
 
 `sprint`, `storyPoints` and `epic` each need the instance's field catalog when the org config does not pin an ID. The catalog read is memoised per client — its outcome included — so a single invocation makes at most one `GET /rest/api/3/field`, shared by the three detections and `search`'s raw-ID check, whether that read succeeds or fails (5xx, 403). A long-lived `JiraClient` can drop the cached outcome with [`clearFieldCaches()`](#library-usage).
+
+Four specifics apply to `description` on `search`:
+
+- **Attachments travel with it.** Selecting `description` also requests Jira's `attachment` field, so a `media` node renders as `![image](attachments/screenshot.png)` and an attachment link as `[screenshot.png](attachments/screenshot.png)` — identical to `fetch`. A search that does not select it requests no extra field.
+- **`adf` has one carve-out.** A plain-string (wiki markup) description has no ADF document to emit and still comes back under `description`. `both` emits both keys whenever a description is present — `description: ""` for an empty ADF doc — so they never disagree about whether one exists.
+- **A custom field named `description` shadows the built-in**, exactly as with `subtasks`: naming `description` or passing `--description-format` is then an error asking you to rename that key, while one arriving implicitly from the config base warns and runs without a rendered description.
+- **Naming it triggers no `GET /rest/api/3/field`** (a mis-cased `+Description` does, reported as `"Description" → "description"`). Any other unknown token, any preset, or `sprint` / `storyPoints` / `epic` still triggers one — so the saving only lands with e.g. `--fields +description` or `--fields "key,status,description"`.
 
 ## Quick start
 
@@ -265,6 +273,9 @@ jirallm search 'project = PROJ' --org acme --fields default,+labels --json  # --
 jirallm search 'project = PROJ' --org acme --fields customfield_10050 --json  # an ID outside jirallm's vocabulary is checked against /rest/api/3/field once and rejected if this instance has no such field (typos fail loudly instead of returning an empty column); run `jirallm fields` for custom-field IDs
 jirallm search 'parent in (PROJ-100, PROJ-200)' --org acme --json  # rows carry `parent` ({key, title, status, issueType, priority} — the last two omitted when Jira has none) by default; drop it with `--fields -parent`
 jirallm search 'project = PROJ' --org acme --fields default,+epic --json  # `epic` works on search: the Epic Link field ID is resolved per instance (org override, else auto-detected, else the common epic IDs), sharing a single `GET /rest/api/3/field` with the other detections
+jirallm search 'project = PROJ' --org acme --fields +description --json  # `description` is opt-in on search (no preset carries it, not even `all`); comes back as Markdown under the same key `fetch --json` uses, and this selector costs no catalog read
+jirallm search 'project = PROJ' --org acme --fields "summary,description" --json  # also works, but `summary` is not a jirallm field name, so it costs one catalog read that `--fields +description` avoids
+jirallm search 'project = PROJ' --org acme --fields +description --description-format both --json  # also emit the lossless ADF under a separate `descriptionAdf` key; ADF is ~2.1x the Markdown on every row, so `markdown` is the default
 jirallm search 'project = PROJ' --org acme --fields minimal --json  # `subtasks` is not projectable by search: it is dropped with a warning here, and is an error when named explicitly — use `jirallm fetch <KEY> --with-subtasks`
 jirallm fetch PROJ-123 --json
 jirallm fetch PROJ-123 --fields all --json      # widen the field set (components, labels, custom fields, ...)

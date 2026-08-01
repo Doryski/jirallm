@@ -301,6 +301,21 @@ describe('search command wiring', () => {
     await run(['search', 'project = PROJ', '--cursor', 'c1', '--next-page-token', 'c2']);
     expect(firstArg(runSearchMock)).toMatchObject({ cursor: 'c1' });
   });
+
+  it('threads --description-format through to runSearch (issue #26)', async () => {
+    await run([
+      'search', 'project = PROJ', '--fields', '+description', '--description-format', 'adf',
+    ]);
+    expect(firstArg(runSearchMock)).toMatchObject({
+      fields: '+description',
+      descriptionFormat: 'adf',
+    });
+  });
+
+  it('leaves descriptionFormat undefined when the flag is absent (issue #26)', async () => {
+    await run(['search', 'project = PROJ', '--fields', '+description']);
+    expect(firstArg(runSearchMock)).not.toHaveProperty('descriptionFormat');
+  });
 });
 
 describe('transition command wiring', () => {

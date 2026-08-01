@@ -13,6 +13,7 @@ import {
   DEFAULT_IMAGE_WIDTH,
   IMAGE_LAYOUTS,
 } from '../lib/adfMedia.js';
+import { DEFAULT_DESCRIPTION_FORMAT, DESCRIPTION_FORMATS } from '../lib/descriptionFormat.js';
 import { runInit } from './commands/init.js';
 import { runAuthSet, runAuthRm, runAuthList, runAuthStatus } from './commands/auth.js';
 import { runOrgsList, runOrgsRemove, runProjectRemove } from './commands/orgs.js';
@@ -903,6 +904,10 @@ program
     '--fields <list>',
     'Field set to include: preset (all|default|minimal), +add/-drop, or a bare comma list. Unlike fetch/export, search also accepts unmapped raw Jira field IDs (e.g. customfield_10050, environment) — IDs only, not display names; an unrecognised name is verified against this instance once and rejected if no such field exists. `epic` is supported and resolved to this instance\'s Epic Link field id; `subtasks` is not projectable by search — naming it is an error, and it is dropped with a warning when it only arrives from a preset or the configured base'
   )
+  .option(
+    '--description-format <format>',
+    `How an opt-in \`description\` is rendered in JSON rows: ${DESCRIPTION_FORMATS.join('|')} (default: ${DEFAULT_DESCRIPTION_FORMAT}); \`adf\`/\`both\` expose the raw ADF under \`descriptionAdf\``
+  )
   .option('--json', 'Output JSON instead of human-readable')
   .action(async (jql: string, opts: Omit<import('./commands/search.js').SearchOptions, 'jql'>) => {
     try {
@@ -963,6 +968,17 @@ contain it) or the configured base — it is dropped with a warning and the sear
 runs. The name is matched case-insensitively either way. Use
 \`jirallm fetch <KEY> --with-subtasks\`.
 
+\`description\` is opt-in: no preset carries it (not even \`all\`), so it only
+lands in the rows when you name it — --fields "+description" or a bare list that
+includes it. It is rendered to Markdown, so a search row's \`description\` reads
+exactly like \`fetch --json\`'s and is always a string. Pass
+--description-format adf to get the lossless ADF document under a separate
+\`descriptionAdf\` key instead, or \`both\` for both keys — either way from the
+same search request, with no second call. ADF is roughly 2.1x the size of the
+Markdown on every row of a page, which is why \`markdown\` is the default and
+why the field is not in any preset. Passing --description-format without
+\`description\` in the resolved field set is an error rather than a no-op.
+
 Examples:
   $ jirallm search 'assignee = currentUser() AND statusCategory != Done' -o acme --json
   $ jirallm search 'project = PROJ AND sprint in openSprints()' -o acme --limit 25
@@ -972,6 +988,7 @@ Examples:
   $ jirallm search 'project = PROJ' -o acme --fields all --json
   $ jirallm search 'project = PROJ' -o acme --fields status --json   # narrow the rows
   $ jirallm search 'parent in (PROJ-100, PROJ-200)' -o acme --json   # group children by row.parent.key
+  $ jirallm search 'project = PROJ' -o acme --fields default,+description --json # Markdown, like fetch
 `
   );
 
