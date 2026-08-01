@@ -56,7 +56,12 @@ type JiraIssue = {
     issuetype?: { name: string };
     parent?: {
       key: string;
-      fields: { summary: string; status?: { name: string } };
+      fields: {
+        summary: string;
+        status?: { name: string };
+        issuetype?: { name: string };
+        priority?: { name: string };
+      };
     };
     attachment?: Array<{ id: string; filename: string; content: string; size: number }>;
     [key: string]: unknown;
@@ -248,6 +253,8 @@ export type ParentRef = {
   key: string;
   title: string;
   status?: string;
+  issueType?: string;
+  priority?: string;
 };
 
 export type TimeTrackingSummary = {

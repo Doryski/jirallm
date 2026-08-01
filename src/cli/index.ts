@@ -846,9 +846,11 @@ vocabulary as \`fetch\` (presets, +add/-drop, bare list) and raw Jira field IDs
 are normalised too (issuetype → issueType, duedate → dueDate). Without it, rows
 stay key/summary/status/assignee/issueType/parent.
 
-\`parent\` is in the default set, with the same normalised {key, title, status}
-shape \`fetch\` returns (omitted when the issue has none); drop it with
---fields -parent.
+\`parent\` is in the default set, with the same normalised
+{key, title, status, issueType, priority} shape \`fetch\` returns (omitted when
+the issue has none; issueType/priority are omitted when Jira does not supply
+them). Drop it with --fields -parent — that is all --fields does to \`parent\`:
+the sub-object's own shape is fixed and does not follow the --fields vocabulary.
 
 Examples:
   $ jirallm search 'assignee = currentUser() AND statusCategory != Done' -o acme --json

@@ -138,7 +138,10 @@ const nonEmptyString = (raw: unknown) => (typeof raw === 'string' && raw ? raw :
 
 const extractParent = (raw: unknown): ParentRef | undefined => {
   const parent = raw as
-    | { key?: unknown; fields?: { summary?: unknown; status?: unknown } }
+    | {
+        key?: unknown;
+        fields?: { summary?: unknown; status?: unknown; issuetype?: unknown; priority?: unknown };
+      }
     | undefined;
   const key = nonEmptyString(parent?.key);
   if (!key) return undefined;
@@ -146,6 +149,8 @@ const extractParent = (raw: unknown): ParentRef | undefined => {
     key,
     title: nonEmptyString(parent?.fields?.summary) ?? '',
     status: nameOf(parent?.fields?.status),
+    issueType: nameOf(parent?.fields?.issuetype),
+    priority: nameOf(parent?.fields?.priority),
   };
 };
 

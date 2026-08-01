@@ -228,6 +228,76 @@ describe('runSearch', () => {
     });
   });
 
+  it('carries the parent issueType and priority into the rows when Jira expands them (issue #22)', async () => {
+    searchIssuesMock.mockResolvedValue({
+      issues: [
+        {
+          key: 'PROJ-101',
+          fields: {
+            summary: 'child',
+            status: { name: 'Open' },
+            parent: {
+              key: 'PROJ-100',
+              fields: {
+                summary: 'Parent epic',
+                status: { name: 'QA Testing' },
+                issuetype: { name: 'Epic' },
+                priority: { name: 'Low' },
+              },
+            },
+          },
+        },
+      ],
+      isLast: true,
+    });
+    const parsed = await runJsonSearch({ jql: 'x', json: true });
+    expect(parsed.issues[0].parent).toEqual({
+      key: 'PROJ-100',
+      title: 'Parent epic',
+      status: 'QA Testing',
+      issueType: 'Epic',
+      priority: 'Low',
+    });
+  });
+
+  it('tells an Epic parent from a Story parent in one page, without a second round trip', async () => {
+    const parentOf = (key: string, parentKey: string, parentType: string) => ({
+      key,
+      fields: {
+        summary: `child ${key}`,
+        status: { name: 'Open' },
+        parent: {
+          key: parentKey,
+          fields: { summary: `parent ${parentKey}`, issuetype: { name: parentType } },
+        },
+      },
+    });
+    searchIssuesMock.mockResolvedValue({
+      issues: [
+        parentOf('PROJ-101', 'PROJ-100', 'Epic'),
+        parentOf('PROJ-201', 'PROJ-200', 'Story'),
+      ],
+      isLast: true,
+    });
+    const parsed = await runJsonSearch({ jql: 'x', json: true });
+    const byParentType = parsed.issues.map(
+      (row: { key: string; parent?: { issueType?: string } }) => [row.key, row.parent?.issueType]
+    );
+    expect(byParentType).toEqual([
+      ['PROJ-101', 'Epic'],
+      ['PROJ-201', 'Story'],
+    ]);
+  });
+
+  it('leaves parent issueType and priority absent, not empty, when Jira omits them', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: [childOf('PROJ-101', 'PROJ-100')], isLast: true });
+    const parsed = await runJsonSearch({ jql: 'x', json: true });
+    const { parent } = parsed.issues[0];
+    expect(parent).toEqual({ key: 'PROJ-100', title: 'epic PROJ-100', status: 'Open' });
+    expect('issueType' in parent).toBe(false);
+    expect('priority' in parent).toBe(false);
+  });
+
   it('groups a page of children into a parent → children map (issue #21)', async () => {
     searchIssuesMock.mockResolvedValue({
       issues: [

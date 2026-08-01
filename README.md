@@ -218,7 +218,7 @@ jirallm issuetypes --org acme --project PROJ --json
 jirallm linktypes --org acme --json
 jirallm search 'assignee = currentUser() AND statusCategory != Done' --org acme --limit 25 --json
 jirallm search 'project = PROJ' --org acme --fields default,+labels --json  # --fields shapes the JSON rows too (same vocabulary as `fetch`; raw Jira field IDs accepted)
-jirallm search 'parent in (PROJ-100, PROJ-200)' --org acme --json  # rows carry `parent` ({key, title, status}) by default; drop it with `--fields -parent`
+jirallm search 'parent in (PROJ-100, PROJ-200)' --org acme --json  # rows carry `parent` ({key, title, status, issueType, priority} — the last two omitted when Jira has none) by default; drop it with `--fields -parent`
 jirallm fetch PROJ-123 --json
 jirallm fetch PROJ-123 --fields all --json      # widen the field set (components, labels, custom fields, ...)
 jirallm fetch PROJ-123 --raw | jq '.fields.labels'  # complete, untransformed Jira field object

@@ -20,7 +20,15 @@ const RAW_FIELDS = {
   fixVersions: [{ name: '1.4.0' }],
   versions: [{ name: '1.3.0' }],
   timetracking: { originalEstimate: '1d', remainingEstimate: '4h', timeSpent: '4h' },
-  parent: { key: 'PROJ-9', fields: { summary: 'Parent task', status: { name: 'To Do' } } },
+  parent: {
+    key: 'PROJ-9',
+    fields: {
+      summary: 'Parent task',
+      status: { name: 'To Do' },
+      issuetype: { name: 'Epic' },
+      priority: { name: 'High' },
+    },
+  },
   customfield_10014: { key: 'PROJ-2', fields: { summary: 'The epic' } },
 };
 
@@ -69,8 +77,42 @@ describe('projectIssueFields', () => {
     expect(projected.resolutionDate).toBe('2026-05-23T09:00:00.000+0200');
   });
 
-  it('summarises parent as key, title and status', () => {
+  it('summarises parent as key, title, status, issue type and priority', () => {
     const projected = projectIssueFields(RAW_FIELDS, ALL_KEYS);
+    expect(projected.parent).toEqual({
+      key: 'PROJ-9',
+      title: 'Parent task',
+      status: 'To Do',
+      issueType: 'Epic',
+      priority: 'High',
+    });
+  });
+
+  it('distinguishes an epic parent from a story parent', () => {
+    const parentOf = (issuetype: string) =>
+      projectIssueFields(
+        {
+          parent: {
+            key: 'PROJ-9',
+            fields: { summary: 'Parent', status: { name: 'To Do' }, issuetype: { name: issuetype } },
+          },
+        },
+        ['parent']
+      ).parent;
+    expect(parentOf('Epic')?.issueType).toBe('Epic');
+    expect(parentOf('Story')?.issueType).toBe('Story');
+  });
+
+  it('omits parent issue type and priority when the raw sub-fields are absent or empty', () => {
+    const projected = projectIssueFields(
+      {
+        parent: {
+          key: 'PROJ-9',
+          fields: { summary: 'Parent task', status: { name: 'To Do' }, priority: { name: '' } },
+        },
+      },
+      ['parent']
+    );
     expect(projected.parent).toEqual({ key: 'PROJ-9', title: 'Parent task', status: 'To Do' });
   });
 

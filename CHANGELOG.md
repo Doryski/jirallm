@@ -8,8 +8,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- The normalised `parent` object returned by `fetch --json` and `search --json` now also carries
+  `issueType` and `priority` (#22), so an Epic parent can be told apart from a Story/Task parent
+  without a second `fetch` on the parent key or a `--raw` round trip. Both are omitted when Jira
+  does not supply them; no extra request is made.
 - `search` now includes `parent` in its default field set (#21): every row carries the same
-  normalised `{ key, title, status }` object `fetch` returns (omitted when the issue has no parent),
+  normalised `{ key, title, status, issueType, priority }` object `fetch` returns (omitted when the
+  issue has no parent),
   so a `parent in (A, B, C)` query groups into a parent → children map without an extra `fetch` per
   child. Drop it with `--fields -parent`; a narrowing selector like `--fields summary,status` omits
   it. Human-readable output labels the parent key on each line when present.

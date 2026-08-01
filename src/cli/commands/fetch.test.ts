@@ -108,6 +108,60 @@ describe('runFetch', () => {
     expect(JSON.parse(writes.join(''))).toEqual(FAKE_DATA);
   });
 
+  it('carries the parent issueType and priority through to the --json output (issue #22)', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    const withParent = {
+      ...FAKE_DATA,
+      parent: {
+        key: 'PROJ-100',
+        title: 'Parent epic',
+        status: 'QA Testing',
+        issueType: 'Epic',
+        priority: 'Low',
+      },
+    };
+    fetchIssueDetailsMock.mockResolvedValue(withParent);
+    await runFetch({ issueKey: 'PROJ-1', org: 'acme', json: true });
+    expect(JSON.parse(writes.join('')).parent).toEqual({
+      key: 'PROJ-100',
+      title: 'Parent epic',
+      status: 'QA Testing',
+      issueType: 'Epic',
+      priority: 'Low',
+    });
+  });
+
+  it('lets a --json consumer tell an Epic parent from a Task parent without a second fetch', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    fetchIssueDetailsMock.mockResolvedValue({
+      ...FAKE_DATA,
+      parent: { key: 'PROJ-100', title: 'Parent epic', status: 'QA Testing', issueType: 'Epic' },
+    });
+    await runFetch({ issueKey: 'PROJ-1', org: 'acme', json: true });
+    expect(JSON.parse(writes.join('')).parent.issueType).toBe('Epic');
+
+    writes.length = 0;
+    fetchIssueDetailsMock.mockResolvedValue({
+      ...FAKE_DATA,
+      parent: { key: 'PROJ-101', title: 'Parent task', status: 'Open', issueType: 'Task' },
+    });
+    await runFetch({ issueKey: 'PROJ-2', org: 'acme', json: true });
+    expect(JSON.parse(writes.join('')).parent.issueType).toBe('Task');
+  });
+
+  it('omits parent issueType and priority when the fetched parent has none', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    fetchIssueDetailsMock.mockResolvedValue({
+      ...FAKE_DATA,
+      parent: { key: 'PROJ-100', title: 'Parent epic' },
+    });
+    await runFetch({ issueKey: 'PROJ-1', org: 'acme', json: true });
+    const { parent } = JSON.parse(writes.join(''));
+    expect(parent).toEqual({ key: 'PROJ-100', title: 'Parent epic' });
+    expect('issueType' in parent).toBe(false);
+    expect('priority' in parent).toBe(false);
+  });
+
   it('prints summary lines + description on TTY', async () => {
     Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
     await runFetch({ issueKey: 'PROJ-1', org: 'acme' });
