@@ -1,7 +1,15 @@
-export { JiraClient, JiraApiError, isJiraApiError } from './lib/jiraClient.js';
+export {
+  JiraClient,
+  JiraApiError,
+  isJiraApiError,
+  requestWithRedirectPolicy,
+  ATLASSIAN_REDIRECT_HOSTS,
+  DEFAULT_MAX_REDIRECTS,
+} from './lib/jiraClient.js';
 export type {
   JiraApiErrorInit,
   JiraConfig,
+  RedirectPolicy,
   JiraTaskData,
   JiraTaskSummary,
   JiraTransition,

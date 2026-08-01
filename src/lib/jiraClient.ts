@@ -11,6 +11,8 @@ export type JiraConfig = {
   baseUrl: string;
   projectKey?: string;
   userEmail: string;
+  /** Overrides for which redirects this client will follow. See {@link RedirectPolicy}. */
+  redirects?: RedirectPolicy;
 };
 
 export type JiraUser = {
@@ -464,6 +466,197 @@ export class JiraApiError extends Error {
 export const isJiraApiError = (error: unknown): error is JiraApiError =>
   JiraApiError.isJiraApiError(error);
 
+/**
+ * Controls which redirects this client is willing to follow. Every HTTP call
+ * runs with `redirect: 'manual'` so a redirect is a decision, not a default:
+ * an allowlisted Jira host that answers `302 Location: http://169.254.169.254/`
+ * must not turn into a request against the caller's internal network.
+ */
+export type RedirectPolicy = {
+  /** Hops to follow before giving up. Default {@link DEFAULT_MAX_REDIRECTS}. */
+  maxRedirects?: number;
+  /**
+   * Hosts a redirect may point at, on top of the request's own host and the
+   * built-in Atlassian list ({@link ATLASSIAN_REDIRECT_HOSTS}). Needed for Jira
+   * Data Center and custom domains that redirect to a sibling host (SSO, CDN).
+   * An entry starting with `.` matches that domain and its subdomains
+   * (`.example.com`); anything else must match the host exactly.
+   */
+  allowedRedirectHosts?: string[];
+};
+
+export const DEFAULT_MAX_REDIRECTS = 3;
+
+/**
+ * Atlassian-owned domains a Jira Cloud request legitimately bounces to.
+ * `atlassianusercontent.com` / `atl-paas.net` / `media.atlassian.com` are where
+ * `/rest/api/3/attachment/content/{id}` sends attachment downloads.
+ */
+export const ATLASSIAN_REDIRECT_HOSTS = [
+  '.atlassian.net',
+  '.atlassian.com',
+  '.jira.com',
+  '.atl-paas.net',
+  '.atlassianusercontent.com',
+] as const;
+
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+
+const normaliseHost = (hostname: string): string =>
+  hostname.toLowerCase().replace(/\.$/, '').replace(/^\[|\]$/g, '');
+
+const isPrivateIpv4 = (hostname: string): boolean => {
+  const parts = hostname.split('.');
+  if (parts.length !== 4) return false;
+  const octets = parts.map(Number);
+  if (octets.some((o) => !Number.isInteger(o) || o < 0 || o > 255)) return false;
+  const [a, b] = octets;
+  if (a === 0 || a === 10 || a === 127) return true;
+  if (a === 169 && b === 254) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 192 && b === 0) return true;
+  if (a === 198 && (b === 18 || b === 19)) return true;
+  if (a === 100 && b >= 64 && b <= 127) return true;
+  return a >= 224;
+};
+
+/**
+ * Literal addresses and names that must never be reached through a redirect.
+ * Note this inspects the *name*, not what it resolves to — see the caveat on
+ * {@link requestWithRedirectPolicy}.
+ */
+const isPrivateHost = (hostname: string): boolean => {
+  const host = normaliseHost(hostname);
+  if (host === 'localhost' || /\.(localhost|local|internal|home\.arpa)$/.test(host)) return true;
+  if (isPrivateIpv4(host)) return true;
+  if (!host.includes(':')) return false;
+  // IPv6: loopback/unspecified, unique-local (fc00::/7), link-local (fe80::/10),
+  // plus IPv4-mapped forms such as `::ffff:127.0.0.1`.
+  if (host === '::1' || host === '::') return true;
+  if (/^f[cd][0-9a-f]{0,2}:/.test(host)) return true;
+  if (/^fe[89ab][0-9a-f]?:/.test(host)) return true;
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/.exec(host);
+  return mapped ? isPrivateIpv4(mapped[1]) : false;
+};
+
+const isHostAllowed = (hostname: string, allowed: readonly string[]): boolean => {
+  const host = normaliseHost(hostname);
+  return allowed.some((raw) => {
+    const entry = normaliseHost(raw.replace(/^\*/, ''));
+    if (!entry) return false;
+    if (!entry.startsWith('.')) return host === entry;
+    return host === entry.slice(1) || host.endsWith(entry);
+  });
+};
+
+const redirectRefused = (response: Response, location: string, reason: string): JiraApiError =>
+  new JiraApiError(
+    `Refused to follow redirect to ${location}: ${reason}`,
+    {
+      status: response.status,
+      statusText: response.statusText,
+      body: '',
+      headers: headersToRecord(response.headers),
+      url: response.url || undefined,
+    }
+  );
+
+/** Case-insensitively drops credential headers before a cross-origin hop. */
+const stripCredentialHeaders = (headers: HeadersInit | undefined): Record<string, string> => {
+  const kept: Record<string, string> = {};
+  const source = headers instanceof Headers || Array.isArray(headers)
+    ? [...new Headers(headers).entries()]
+    : Object.entries(headers ?? {});
+  for (const [key, value] of source) {
+    if (['authorization', 'cookie', 'proxy-authorization'].includes(key.toLowerCase())) continue;
+    kept[key] = String(value);
+  }
+  return kept;
+};
+
+/**
+ * `fetch` with an explicit redirect policy.
+ *
+ * **Protects against:** a compromised or hostile Jira host bouncing the client
+ * onto an unrelated origin, a scheme downgrade to `http`, a literal private /
+ * loopback / link-local / CGNAT / multicast address (IPv4 and IPv6, including
+ * the decimal and `::ffff:` forms the WHATWG URL parser normalises), unbounded
+ * redirect chains, and credential leakage — `Authorization` and `Cookie` are
+ * dropped the moment the origin changes.
+ *
+ * **Does NOT protect against:** DNS rebinding or a hostname that simply
+ * *resolves* to a private address. The check is on the redirect target's name;
+ * an allowlisted host pointing its A record at `127.0.0.1` would still be
+ * dialled. Closing that requires resolve-then-pin at the socket layer (a custom
+ * undici dispatcher), which is out of scope here. It also does not inspect
+ * response bodies, and it does not re-validate the *initial* URL — the caller
+ * still owns first-hop validation of `baseUrl`.
+ */
+export const requestWithRedirectPolicy = async (
+  input: string,
+  init: RequestInit = {},
+  policy: RedirectPolicy = {}
+): Promise<Response> => {
+  const maxRedirects = policy.maxRedirects ?? DEFAULT_MAX_REDIRECTS;
+  const allowedHosts = [...ATLASSIAN_REDIRECT_HOSTS, ...(policy.allowedRedirectHosts ?? [])];
+  const origin = new URL(input);
+
+  let currentUrl = input;
+  let currentInit: RequestInit = { ...init, redirect: 'manual' };
+
+  for (let hop = 0; ; hop++) {
+    const response = await fetch(currentUrl, currentInit);
+    if (!REDIRECT_STATUSES.has(response.status)) return response;
+
+    const location = response.headers?.get?.('location');
+    // A 3xx the caller is meant to see (300, 304, or a malformed redirect).
+    if (!location) return response;
+
+    if (hop >= maxRedirects) {
+      throw redirectRefused(response, location, `exceeded ${maxRedirects} redirect hops`);
+    }
+
+    const from = new URL(currentUrl);
+    let target: URL;
+    try {
+      target = new URL(location, currentUrl);
+    } catch {
+      throw redirectRefused(response, location, 'target is not a valid URL');
+    }
+
+    // The host the caller originally asked for is never an escalation — a Data
+    // Center install on a private address must keep working.
+    const isOriginHost = normaliseHost(target.hostname) === normaliseHost(origin.hostname);
+
+    if (target.protocol !== 'https:' && !(isOriginHost && target.protocol === from.protocol)) {
+      throw redirectRefused(response, target.href, `scheme "${target.protocol}" is not allowed`);
+    }
+    if (!isOriginHost && isPrivateHost(target.hostname)) {
+      throw redirectRefused(response, target.href, 'target is a private or loopback address');
+    }
+    if (!isOriginHost && !isHostAllowed(target.hostname, allowedHosts)) {
+      throw redirectRefused(
+        response,
+        target.href,
+        `host "${target.hostname}" is not in the allowed redirect hosts`
+      );
+    }
+
+    const crossOrigin = target.origin !== from.origin;
+    const method = (currentInit.method ?? 'GET').toUpperCase();
+    // Per the fetch spec: 303 always becomes GET, and 301/302 do for POST.
+    const downgradeToGet =
+      response.status === 303 || (response.status !== 307 && response.status !== 308 && method === 'POST');
+
+    const nextHeaders = crossOrigin ? stripCredentialHeaders(currentInit.headers) : currentInit.headers;
+    currentInit = downgradeToGet
+      ? { ...currentInit, method: 'GET', body: undefined, headers: nextHeaders, redirect: 'manual' }
+      : { ...currentInit, headers: nextHeaders, redirect: 'manual' };
+    currentUrl = target.href;
+  }
+};
+
 export class JiraClient {
   private config: JiraConfig;
   private authHeader: string;
@@ -474,6 +667,15 @@ export class JiraClient {
   constructor(config: JiraConfig, apiToken: string) {
     this.config = config;
     this.authHeader = `Basic ${Buffer.from(`${config.userEmail}:${apiToken}`).toString('base64')}`;
+  }
+
+  /**
+   * Single HTTP entry point for the whole client. Every request goes through
+   * {@link requestWithRedirectPolicy}, so no call site can silently inherit
+   * `fetch`'s default `redirect: 'follow'`.
+   */
+  private httpRequest(url: string, init: RequestInit = {}): Promise<Response> {
+    return requestWithRedirectPolicy(url, init, this.config.redirects);
   }
 
   async listFields(): Promise<JiraFieldMeta[]> {
@@ -732,7 +934,7 @@ export class JiraClient {
 
   private async makeRequest<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
     const url = `${this.config.baseUrl}/rest/api/3${endpoint}`;
-    const response = await fetch(url, {
+    const response = await this.httpRequest(url, {
       ...options,
       headers: {
         Authorization: this.authHeader,
@@ -984,7 +1186,7 @@ export class JiraClient {
     const url = `${this.config.baseUrl}/rest/api/2/issue/${issueKey}/comment`;
     const payload: Record<string, unknown> = { body: wikiBody };
     if (parentCommentId) payload.parentId = parentCommentId;
-    const response = await fetch(url, {
+    const response = await this.httpRequest(url, {
       method: 'POST',
       headers: {
         Authorization: this.authHeader,
@@ -1010,7 +1212,7 @@ export class JiraClient {
     }
   ): Promise<{ id: string; issueId: string }> {
     const url = `${this.config.baseUrl}/rest/api/2/issue/${issueKey}/worklog`;
-    const response = await fetch(url, {
+    const response = await this.httpRequest(url, {
       method: 'POST',
       headers: {
         Authorization: this.authHeader,
@@ -1028,7 +1230,7 @@ export class JiraClient {
 
   async updateComment(issueKey: string, commentId: string, wikiBody: string): Promise<void> {
     const url = `${this.config.baseUrl}/rest/api/2/issue/${issueKey}/comment/${commentId}`;
-    const response = await fetch(url, {
+    const response = await this.httpRequest(url, {
       method: 'PUT',
       headers: {
         Authorization: this.authHeader,
@@ -1044,7 +1246,7 @@ export class JiraClient {
 
   async updateCommentAdf(issueKey: string, commentId: string, adf: AdfDocument): Promise<void> {
     const url = `${this.config.baseUrl}/rest/api/3/issue/${issueKey}/comment/${commentId}`;
-    const response = await fetch(url, {
+    const response = await this.httpRequest(url, {
       method: 'PUT',
       headers: {
         Authorization: this.authHeader,
@@ -1067,7 +1269,7 @@ export class JiraClient {
 
   async updateIssueDescriptionAdf(issueKey: string, adf: AdfDocument): Promise<void> {
     const url = `${this.config.baseUrl}/rest/api/3/issue/${issueKey}`;
-    const response = await fetch(url, {
+    const response = await this.httpRequest(url, {
       method: 'PUT',
       headers: {
         Authorization: this.authHeader,
@@ -1083,7 +1285,7 @@ export class JiraClient {
 
   async deleteComment(issueKey: string, commentId: string): Promise<void> {
     const url = `${this.config.baseUrl}/rest/api/2/issue/${issueKey}/comment/${commentId}`;
-    const response = await fetch(url, {
+    const response = await this.httpRequest(url, {
       method: 'DELETE',
       headers: { Authorization: this.authHeader, Accept: 'application/json' },
     });
@@ -1094,7 +1296,7 @@ export class JiraClient {
 
   private async makeAgileRequest<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
     const url = `${this.config.baseUrl}/rest/agile/1.0${endpoint}`;
-    const response = await fetch(url, {
+    const response = await this.httpRequest(url, {
       ...options,
       headers: {
         Authorization: this.authHeader,
@@ -1338,7 +1540,7 @@ export class JiraClient {
     const match = await this.resolveTransition(issueKey, targetStatus);
     if (opts.dryRun) return { id: match.id, name: match.name };
     const url = `${this.config.baseUrl}/rest/api/3/issue/${issueKey}/transitions`;
-    const response = await fetch(url, {
+    const response = await this.httpRequest(url, {
       method: 'POST',
       headers: {
         Authorization: this.authHeader,
@@ -1384,7 +1586,7 @@ export class JiraClient {
     if (input.customFields) Object.assign(fields, input.customFields);
 
     const url = `${this.config.baseUrl}/rest/api/2/issue`;
-    const response = await fetch(url, {
+    const response = await this.httpRequest(url, {
       method: 'POST',
       headers: {
         Authorization: this.authHeader,
@@ -1438,7 +1640,7 @@ export class JiraClient {
     }
 
     const url = `${this.config.baseUrl}/rest/api/2/issue/${issueKey}`;
-    const response = await fetch(url, {
+    const response = await this.httpRequest(url, {
       method: 'PUT',
       headers: {
         Authorization: this.authHeader,
@@ -1454,7 +1656,7 @@ export class JiraClient {
 
   async assignIssue(issueKey: string, accountIdOrNull: string | null): Promise<void> {
     const url = `${this.config.baseUrl}/rest/api/3/issue/${issueKey}/assignee`;
-    const response = await fetch(url, {
+    const response = await this.httpRequest(url, {
       method: 'PUT',
       headers: {
         Authorization: this.authHeader,
@@ -1481,7 +1683,7 @@ export class JiraClient {
     };
     if (comment) payload.comment = { body: markdownToWiki(comment) };
     const url = `${this.config.baseUrl}/rest/api/3/issueLink`;
-    const response = await fetch(url, {
+    const response = await this.httpRequest(url, {
       method: 'POST',
       headers: {
         Authorization: this.authHeader,
@@ -1497,7 +1699,7 @@ export class JiraClient {
 
   async removeIssueLink(linkId: string): Promise<void> {
     const url = `${this.config.baseUrl}/rest/api/3/issueLink/${linkId}`;
-    const response = await fetch(url, {
+    const response = await this.httpRequest(url, {
       method: 'DELETE',
       headers: { Authorization: this.authHeader, Accept: 'application/json' },
     });
@@ -1516,7 +1718,7 @@ export class JiraClient {
   async addWatcher(issueKey: string, accountId: string): Promise<void> {
     const url = `${this.config.baseUrl}/rest/api/3/issue/${issueKey}/watchers`;
     // Jira quirk: body is a JSON string (account id in quotes), not an object
-    const response = await fetch(url, {
+    const response = await this.httpRequest(url, {
       method: 'POST',
       headers: {
         Authorization: this.authHeader,
@@ -1532,7 +1734,7 @@ export class JiraClient {
 
   async removeWatcher(issueKey: string, accountId: string): Promise<void> {
     const url = `${this.config.baseUrl}/rest/api/3/issue/${issueKey}/watchers?accountId=${encodeURIComponent(accountId)}`;
-    const response = await fetch(url, {
+    const response = await this.httpRequest(url, {
       method: 'DELETE',
       headers: { Authorization: this.authHeader, Accept: 'application/json' },
     });
@@ -1549,7 +1751,7 @@ export class JiraClient {
     form.append('file', new Blob([arr]), basename(filePath));
 
     const url = `${this.config.baseUrl}/rest/api/3/issue/${issueKey}/attachments`;
-    const response = await fetch(url, {
+    const response = await this.httpRequest(url, {
       method: 'POST',
       headers: {
         Authorization: this.authHeader,
@@ -1589,7 +1791,7 @@ export class JiraClient {
 
   async deleteAttachment(attachmentId: string): Promise<void> {
     const url = `${this.config.baseUrl}/rest/api/3/attachment/${attachmentId}`;
-    const response = await fetch(url, {
+    const response = await this.httpRequest(url, {
       method: 'DELETE',
       headers: { Authorization: this.authHeader, Accept: 'application/json' },
     });
@@ -1601,7 +1803,7 @@ export class JiraClient {
   async downloadAttachment(attachmentUrl: string, outputPath: string): Promise<void> {
     await mkdir(dirname(outputPath), { recursive: true });
 
-    const response = await fetch(attachmentUrl, {
+    const response = await this.httpRequest(attachmentUrl, {
       headers: { Authorization: this.authHeader },
     });
 
