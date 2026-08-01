@@ -824,9 +824,12 @@ program
   .option('--limit <n>', 'Page size (default 50)')
   .option('--cursor <token>', 'Next page token from prior search')
   .option('--next-page-token <token>', 'Alias for --cursor')
-  .option('--fields <list>', 'Comma-separated Jira field IDs to include')
+  .option(
+    '--fields <list>',
+    'Field set to include: preset (all|default|minimal), +add/-drop, or a bare comma list (raw Jira field IDs also accepted)'
+  )
   .option('--json', 'Output JSON instead of human-readable')
-  .action(async (jql: string, opts: { org?: string; limit?: string; cursor?: string; nextPageToken?: string; fields?: string; json?: boolean }) => {
+  .action(async (jql: string, opts: Omit<import('./commands/search.js').SearchOptions, 'jql'>) => {
     try {
       const { nextPageToken, ...rest } = opts;
       await runSearch({ jql, ...rest, cursor: opts.cursor ?? nextPageToken });
@@ -838,11 +841,18 @@ program
 JQL must be quoted in your shell (it usually contains spaces and shell metacharacters).
 Output JSON includes "nextPageToken" — pass it back via --cursor for the next page.
 
+--fields shapes the JSON rows, not just the Jira request: it uses the same
+vocabulary as \`fetch\` (presets, +add/-drop, bare list) and raw Jira field IDs
+are normalised too (issuetype → issueType, duedate → dueDate). Without it, rows
+stay key/summary/status/assignee/issueType.
+
 Examples:
   $ jirallm search 'assignee = currentUser() AND statusCategory != Done' -o acme --json
   $ jirallm search 'project = PROJ AND sprint in openSprints()' -o acme --limit 25
   $ jirallm search 'project = PROJ' -o acme --cursor eyJsYXN0SXNzdWVLZXkiOi4uLn0= --json
-  $ jirallm search 'project = PROJ' -o acme --fields summary,status,assignee --json
+  $ jirallm search 'project = PROJ' -o acme --fields default,+priority,+labels --json
+  $ jirallm search 'project = PROJ' -o acme --fields all --json
+  $ jirallm search 'project = PROJ' -o acme --fields status --json   # narrow the rows
 `
   );
 

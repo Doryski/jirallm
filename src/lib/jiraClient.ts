@@ -3,6 +3,7 @@ import { mkdir, readFile, stat } from 'fs/promises';
 import { basename, dirname } from 'path';
 import { pipeline } from 'stream/promises';
 import type { CustomFieldDefs } from './exportFields.js';
+import { COMMON_EPIC_FIELDS, PROJECTABLE_FIELDS, projectIssueFields } from './fieldProjection.js';
 import type { AdfDocument } from './adfMedia.js';
 import { markdownToWiki } from './markdownToWiki.js';
 
@@ -316,68 +317,6 @@ export type JiraTaskSummary = {
   subtasks?: SubtaskSummary[];
 };
 
-function extractActiveSprintName(raw: unknown): string | undefined {
-  if (!raw) return undefined;
-  const arr = Array.isArray(raw) ? raw : [raw];
-  type SprintLike = { name?: string; state?: string };
-  const items: SprintLike[] = arr
-    .map((entry): SprintLike | undefined => {
-      if (entry && typeof entry === 'object') return entry as SprintLike;
-      if (typeof entry === 'string') {
-        const nameMatch = entry.match(/name=([^,\]]+)/);
-        const stateMatch = entry.match(/state=([^,\]]+)/);
-        return {
-          name: nameMatch?.[1],
-          state: stateMatch?.[1],
-        };
-      }
-      return undefined;
-    })
-    .filter((x): x is SprintLike => Boolean(x));
-  const active = items.find((s) => s.state?.toLowerCase() === 'active');
-  return (active ?? items[items.length - 1])?.name;
-}
-
-function extractCustomFieldValue(raw: unknown, type: string): unknown {
-  if (raw === null || raw === undefined) return undefined;
-  switch (type) {
-    case 'scalar':
-      return typeof raw === 'string' || typeof raw === 'number' || typeof raw === 'boolean'
-        ? raw
-        : undefined;
-    case 'number':
-      return typeof raw === 'number' ? raw : undefined;
-    case 'select':
-      if (typeof raw === 'object' && raw !== null && 'value' in raw) {
-        return (raw as { value: unknown }).value;
-      }
-      return undefined;
-    case 'user':
-      if (typeof raw === 'object' && raw !== null && 'displayName' in raw) {
-        return (raw as { displayName: unknown }).displayName;
-      }
-      return undefined;
-    case 'sprint':
-      return extractActiveSprintName(raw);
-    case 'array':
-      if (!Array.isArray(raw)) return undefined;
-      return raw
-        .map((item) => {
-          if (typeof item === 'string') return item;
-          if (item && typeof item === 'object' && 'value' in item) {
-            return (item as { value: unknown }).value;
-          }
-          if (item && typeof item === 'object' && 'name' in item) {
-            return (item as { name: unknown }).name;
-          }
-          return undefined;
-        })
-        .filter((x) => x !== undefined);
-    default:
-      return undefined;
-  }
-}
-
 export type JiraApiErrorInit = {
   status: number;
   statusText: string;
@@ -512,13 +451,6 @@ export class JiraApiError extends Error {
 export const isJiraApiError = (error: unknown): error is JiraApiError =>
   JiraApiError.isJiraApiError(error);
 
-const COMMON_EPIC_FIELDS = [
-  'customfield_10014',
-  'customfield_10008',
-  'customfield_10001',
-  'customfield_10011',
-];
-
 export class JiraClient {
   private config: JiraConfig;
   private authHeader: string;
@@ -570,18 +502,6 @@ export class JiraClient {
       this.storyPointsFieldIdCache = null;
       return undefined;
     }
-  }
-
-  private extractEpicFromFields(
-    fields: Record<string, unknown>
-  ): { key: string; title: string } | undefined {
-    for (const fieldId of COMMON_EPIC_FIELDS) {
-      const epicField = fields[fieldId] as { key: string; fields: { summary: string } } | undefined;
-      if (epicField?.key && epicField.fields?.summary) {
-        return { key: epicField.key, title: epicField.fields.summary };
-      }
-    }
-    return undefined;
   }
 
   convertADFToMarkdown(
@@ -931,21 +851,15 @@ export class JiraClient {
     }
   ): JiraTaskData {
     const f = response.fields;
+    const selectedKeys = [...PROJECTABLE_FIELDS, ...Object.keys(ctx.customFieldDefs)];
+    const projected = projectIssueFields(f, selectedKeys, ctx);
 
-    const data: JiraTaskData = {
+    return {
       key: response.key,
       title: f.summary,
-      status: f.status?.name || 'Unknown',
+      ...projected,
+      status: projected.status || 'Unknown',
       description: this.convertADFToMarkdown(f.description, attachmentMetadata),
-      issueType: f.issuetype?.name,
-      parent: f.parent
-        ? {
-            key: f.parent.key,
-            title: f.parent.fields.summary,
-            status: f.parent.fields.status?.name,
-          }
-        : undefined,
-      epic: this.extractEpicFromFields(f),
       attachments:
         f.attachment?.map((att) => ({
           id: att.id,
@@ -955,104 +869,6 @@ export class JiraClient {
         })) || [],
       history,
     };
-
-    const priority = f.priority as { name?: string } | undefined;
-    if (priority?.name) data.priority = priority.name;
-
-    const resolution = f.resolution as { name?: string } | undefined;
-    if (resolution?.name) data.resolution = resolution.name;
-
-    const assignee = f.assignee as { displayName?: string } | undefined;
-    if (assignee?.displayName) data.assignee = assignee.displayName;
-    const reporter = f.reporter as { displayName?: string } | undefined;
-    if (reporter?.displayName) data.reporter = reporter.displayName;
-    const creator = f.creator as { displayName?: string } | undefined;
-    if (creator?.displayName) data.creator = creator.displayName;
-
-    if (typeof f.created === 'string') data.createdAt = f.created;
-    if (typeof f.updated === 'string') data.updatedAt = f.updated;
-    if (typeof f.duedate === 'string' && f.duedate) data.dueDate = f.duedate;
-    if (typeof f.resolutiondate === 'string' && f.resolutiondate) {
-      data.resolutionDate = f.resolutiondate;
-    }
-
-    const components = f.components as Array<{ name: string }> | undefined;
-    if (components?.length) data.components = components.map((c) => c.name);
-
-    const labels = f.labels as string[] | undefined;
-    if (labels?.length) data.labels = labels;
-
-    const fixVersions = f.fixVersions as Array<{ name: string }> | undefined;
-    if (fixVersions?.length) data.fixVersions = fixVersions.map((v) => v.name);
-    const versions = f.versions as Array<{ name: string }> | undefined;
-    if (versions?.length) data.versions = versions.map((v) => v.name);
-
-    if (ctx.sprintFieldId) {
-      const sprintField = f[ctx.sprintFieldId];
-      const sprintName = extractActiveSprintName(sprintField);
-      if (sprintName) data.sprint = sprintName;
-    }
-    if (ctx.storyPointsFieldId) {
-      const sp = f[ctx.storyPointsFieldId];
-      if (typeof sp === 'number') data.storyPoints = sp;
-    }
-
-    const tt = f.timetracking as
-      | { originalEstimate?: string; remainingEstimate?: string; timeSpent?: string }
-      | undefined;
-    if (tt && (tt.originalEstimate || tt.remainingEstimate || tt.timeSpent)) {
-      data.timetracking = {
-        originalEstimate: tt.originalEstimate,
-        remainingEstimate: tt.remainingEstimate,
-        timeSpent: tt.timeSpent,
-      };
-    }
-
-    const issueLinks = f.issuelinks as
-      | Array<{
-          id: string;
-          type: { inward?: string; outward?: string; name?: string };
-          inwardIssue?: { key: string; fields: { summary: string; status?: { name: string } } };
-          outwardIssue?: { key: string; fields: { summary: string; status?: { name: string } } };
-        }>
-      | undefined;
-    if (issueLinks?.length) {
-      const mapped: IssueLinkSummary[] = [];
-      for (const link of issueLinks) {
-        if (link.inwardIssue) {
-          mapped.push({
-            id: link.id,
-            type: link.type.inward ?? link.type.name ?? 'relates to',
-            key: link.inwardIssue.key,
-            title: link.inwardIssue.fields.summary,
-            status: link.inwardIssue.fields.status?.name,
-          });
-        } else if (link.outwardIssue) {
-          mapped.push({
-            id: link.id,
-            type: link.type.outward ?? link.type.name ?? 'relates to',
-            key: link.outwardIssue.key,
-            title: link.outwardIssue.fields.summary,
-            status: link.outwardIssue.fields.status?.name,
-          });
-        }
-      }
-      if (mapped.length) data.issueLinks = mapped;
-    }
-
-    const customFieldDefs = ctx.customFieldDefs;
-    if (Object.keys(customFieldDefs).length > 0) {
-      const cf: Record<string, unknown> = {};
-      for (const [friendly, def] of Object.entries(customFieldDefs)) {
-        if (friendly === 'sprint' || friendly === 'storyPoints') continue;
-        const raw = f[def.id];
-        const value = extractCustomFieldValue(raw, def.type);
-        if (value !== undefined && value !== null && value !== '') cf[friendly] = value;
-      }
-      if (Object.keys(cf).length > 0) data.customFields = cf;
-    }
-
-    return data;
   }
 
   async fetchIssueComments(

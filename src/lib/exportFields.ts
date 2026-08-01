@@ -52,6 +52,19 @@ export const BUILT_IN_FIELD_TO_JIRA_ID: Record<BuiltInField, string | null> = {
   subtasks: '__subtasks__',
 };
 
+export const JIRA_ID_TO_BUILT_IN_FIELD: Record<string, BuiltInField> = Object.fromEntries(
+  Object.entries(BUILT_IN_FIELD_TO_JIRA_ID)
+    .filter(([, id]) => id && !id.startsWith('__'))
+    .map(([key, id]) => [(id as string).toLowerCase(), key as BuiltInField])
+);
+
+const BUILT_IN_FIELD_SET = new Set<string>(BUILT_IN_FIELDS);
+
+export function normalizeFieldName(token: string): string {
+  if (BUILT_IN_FIELD_SET.has(token)) return token;
+  return JIRA_ID_TO_BUILT_IN_FIELD[token.toLowerCase()] ?? token;
+}
+
 export const PRESETS = {
   minimal: ['key', 'status', 'issueType', 'parent', 'epic', 'subtasks'],
   default: [
@@ -102,6 +115,18 @@ export type ResolvedFieldSet = {
 
 const ALWAYS_FETCH = ['summary', 'description', 'status', 'parent', 'attachment', 'issuetype'];
 
+export const SEARCH_ALWAYS_FETCH = ['summary', 'status'] as const;
+export type SearchAlwaysFetchId = (typeof SEARCH_ALWAYS_FETCH)[number];
+
+export const SEARCH_DEFAULT_KEYS = ['key', 'status', 'assignee', 'issueType'] as const;
+export type SearchDefaultKey = (typeof SEARCH_DEFAULT_KEYS)[number];
+
+export type ResolveFieldSetOptions = {
+  alwaysFetch?: readonly string[];
+  defaultKeys?: readonly string[];
+  passThroughUnknown?: boolean;
+};
+
 export function parseFieldsFlag(raw: string): FieldSelector {
   const tokens = raw
     .split(',')
@@ -139,48 +164,65 @@ export function parseFieldsFlag(raw: string): FieldSelector {
   return { preset, include, exclude };
 }
 
+function normalizeSelectorTokens(
+  tokens: string[] | undefined,
+  customFieldDefs: CustomFieldDefs
+): string[] | undefined {
+  if (!tokens) return undefined;
+  return tokens.map((t) => (Object.hasOwn(customFieldDefs, t) ? t : normalizeFieldName(t)));
+}
+
 export function resolveFieldSet(
   selector: FieldSelector | undefined,
-  customFieldDefs: CustomFieldDefs = {}
+  customFieldDefs: CustomFieldDefs = {},
+  options: ResolveFieldSetOptions = {}
 ): ResolvedFieldSet {
   const customKeys = Object.keys(customFieldDefs);
+  const alwaysFetch = options.alwaysFetch ?? ALWAYS_FETCH;
+  const defaultKeys = options.defaultKeys ?? PRESETS.default;
+  const include = normalizeSelectorTokens(selector?.include, customFieldDefs);
+  const exclude = normalizeSelectorTokens(selector?.exclude, customFieldDefs);
 
   let base: string[];
-  if (!selector || (!selector.preset && !selector.include && !selector.exclude)) {
-    base = [...PRESETS.default];
+  if (!selector || (!selector.preset && !include && !exclude)) {
+    base = [...defaultKeys];
   } else if (selector.preset) {
     base = [...PRESETS[selector.preset]];
-  } else if (selector.include && selector.include.length > 0 && !selector.exclude?.length) {
+  } else if (include && include.length > 0 && !exclude?.length) {
     // bare-name mode: exact set from include
-    base = [...selector.include];
+    base = [...include];
   } else {
-    base = [...PRESETS.default];
+    base = [...defaultKeys];
   }
 
   const set = new Set(base);
-  if (selector?.include) {
-    for (const k of selector.include) set.add(k);
+  if (include) {
+    for (const k of include) set.add(k);
   }
-  if (selector?.exclude) {
-    for (const k of selector.exclude) set.delete(k);
+  if (exclude) {
+    for (const k of exclude) set.delete(k);
   }
 
   // Custom field keys are always included if defined and not explicitly excluded.
   for (const k of customKeys) {
-    if (!selector?.exclude?.includes(k)) set.add(k);
+    if (!exclude?.includes(k)) set.add(k);
   }
 
   const friendlyKeys = [...set];
 
-  const jiraIds = new Set<string>(ALWAYS_FETCH);
+  const jiraIds = new Set<string>(alwaysFetch);
   for (const key of friendlyKeys) {
     if (key in BUILT_IN_FIELD_TO_JIRA_ID) {
       const id = BUILT_IN_FIELD_TO_JIRA_ID[key as BuiltInField];
       if (id && !id.startsWith('__')) jiraIds.add(id);
-    } else {
-      const def = customFieldDefs[key];
-      if (def) jiraIds.add(def.id);
+      continue;
     }
+    const def = customFieldDefs[key];
+    if (def) {
+      jiraIds.add(def.id);
+      continue;
+    }
+    if (options.passThroughUnknown && !key.startsWith('__')) jiraIds.add(key);
   }
 
   return {

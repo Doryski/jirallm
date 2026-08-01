@@ -12,13 +12,30 @@ vi.mock('../../lib/config.js', () => ({
 }));
 
 const searchIssuesMock = vi.fn();
+const detectSprintFieldIdMock = vi.fn(async () => 'customfield_10020');
+const detectStoryPointsFieldIdMock = vi.fn(async () => 'customfield_10030');
 vi.mock('../../lib/jiraClient.js', () => ({
   JiraClient: class {
     searchIssues = searchIssuesMock;
+    detectSprintFieldId = detectSprintFieldIdMock;
+    detectStoryPointsFieldId = detectStoryPointsFieldIdMock;
   },
 }));
 
 import { runSearch } from './search.js';
+import {
+  parseFieldsFlag,
+  resolveFieldSet,
+  SEARCH_ALWAYS_FETCH,
+  SEARCH_DEFAULT_KEYS,
+} from '../../lib/exportFields.js';
+
+const resolveSearchFields = (raw?: string) =>
+  resolveFieldSet(raw ? parseFieldsFlag(raw) : undefined, {}, {
+    alwaysFetch: SEARCH_ALWAYS_FETCH,
+    defaultKeys: SEARCH_DEFAULT_KEYS,
+    passThroughUnknown: true,
+  });
 
 const SAMPLE_ISSUES = [
   {
@@ -28,6 +45,11 @@ const SAMPLE_ISSUES = [
       status: { name: 'Open' },
       assignee: { displayName: 'Jane' },
       issuetype: { name: 'Task' },
+      priority: { name: 'High' },
+      labels: ['a', 'b'],
+      duedate: '2026-08-01',
+      environment: 'staging',
+      customfield_10050: { value: 'Platform' },
     },
   },
   {
@@ -35,6 +57,13 @@ const SAMPLE_ISSUES = [
     fields: { summary: 'two', status: { name: 'Done' } },
   },
 ];
+
+const runJsonSearch = async (opts: Parameters<typeof runSearch>[0]) => {
+  Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+  writes.length = 0;
+  await runSearch(opts);
+  return JSON.parse(writes.join(''));
+};
 
 let logs: string[];
 let writes: string[];
@@ -46,6 +75,8 @@ beforeEach(() => {
   vi.spyOn(console, 'log').mockImplementation((...a) => { logs.push(a.map(String).join(' ')); });
   vi.spyOn(process.stdout, 'write').mockImplementation((c) => { writes.push(String(c)); return true; });
   searchIssuesMock.mockReset();
+  detectSprintFieldIdMock.mockClear();
+  detectStoryPointsFieldIdMock.mockClear();
 });
 
 afterEach(() => {
@@ -85,9 +116,7 @@ describe('runSearch', () => {
       isLast: false,
       nextPageToken: 'next-token',
     });
-    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
-    await runSearch({ jql: 'x', json: true });
-    const parsed = JSON.parse(writes.join(''));
+    const parsed = await runJsonSearch({ jql: 'x', json: true });
     expect(parsed.issues).toHaveLength(2);
     expect(parsed.issues[0]).toEqual({
       key: 'PROJ-1',
@@ -96,8 +125,97 @@ describe('runSearch', () => {
       assignee: 'Jane',
       issueType: 'Task',
     });
+    expect(parsed.issues[1]).toEqual({ key: 'PROJ-2', summary: 'two', status: 'Done' });
     expect(parsed.nextPageToken).toBe('next-token');
     expect(parsed.isLast).toBe(false);
+  });
+
+  it('requests exactly the resolved default field IDs, without ADF-heavy fields', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: [], isLast: true });
+    await runJsonSearch({ jql: 'x', json: true });
+    const requested = searchIssuesMock.mock.calls[0][1].fields;
+    expect(requested).toEqual(resolveSearchFields().jiraFieldIds);
+    expect(requested).not.toContain('description');
+    expect(requested).not.toContain('attachment');
+  });
+
+  it('includes extra selected fields in the JSON rows (issue #20)', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    const parsed = await runJsonSearch({
+      jql: 'x',
+      json: true,
+      fields: 'priority,labels,duedate',
+    });
+    expect(searchIssuesMock.mock.calls[0][1].fields).toEqual(
+      resolveSearchFields('priority,labels,duedate').jiraFieldIds
+    );
+    expect(parsed.issues[0]).toMatchObject({
+      key: 'PROJ-1',
+      summary: 'one',
+      priority: 'High',
+      labels: ['a', 'b'],
+      dueDate: '2026-08-01',
+    });
+  });
+
+  it('requests unmapped custom field IDs on the wire and passes their raw value through', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    const parsed = await runJsonSearch({ jql: 'x', json: true, fields: 'customfield_10050' });
+    expect(searchIssuesMock.mock.calls[0][1].fields).toEqual(
+      resolveSearchFields('customfield_10050').jiraFieldIds
+    );
+    expect(searchIssuesMock.mock.calls[0][1].fields).toContain('customfield_10050');
+    expect(parsed.issues[0].customfield_10050).toEqual({ value: 'Platform' });
+  });
+
+  it('requests unmapped built-in Jira field names and passes their raw value through', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    const parsed = await runJsonSearch({ jql: 'x', json: true, fields: 'environment' });
+    expect(searchIssuesMock.mock.calls[0][1].fields).toContain('environment');
+    expect(parsed.issues[0].environment).toBe('staging');
+  });
+
+  it('omits a passed-through key when the issue has no raw value for it', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    const parsed = await runJsonSearch({ jql: 'x', json: true, fields: 'environment' });
+    expect(parsed.issues[1]).toEqual({ key: 'PROJ-2', summary: 'two' });
+    expect('environment' in parsed.issues[1]).toBe(false);
+  });
+
+  it('normalises raw Jira field IDs to friendly keys', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    const parsed = await runJsonSearch({ jql: 'x', json: true, fields: 'issuetype,duedate' });
+    expect(searchIssuesMock.mock.calls[0][1].fields).toContain('issuetype');
+    expect(parsed.issues[0].issueType).toBe('Task');
+    expect(parsed.issues[0].dueDate).toBe('2026-08-01');
+  });
+
+  it('treats "all" as a preset rather than a literal field id', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    const parsed = await runJsonSearch({ jql: 'x', json: true, fields: 'all' });
+    const requested = searchIssuesMock.mock.calls[0][1].fields;
+    expect(requested).not.toContain('all');
+    expect(requested).toEqual(expect.arrayContaining(['priority', 'labels', 'duedate']));
+    expect(parsed.issues[0]).toMatchObject({ priority: 'High', dueDate: '2026-08-01' });
+  });
+
+  it('narrows the JSON rows when --fields excludes defaults', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
+    const parsed = await runJsonSearch({ jql: 'x', json: true, fields: 'status' });
+    expect(parsed.issues[0]).toEqual({ key: 'PROJ-1', summary: 'one', status: 'Open' });
+  });
+
+  it('resolves sprint/story-point field IDs only when those keys are selected', async () => {
+    searchIssuesMock.mockResolvedValue({ issues: [], isLast: true });
+    await runJsonSearch({ jql: 'x', json: true });
+    expect(detectSprintFieldIdMock).not.toHaveBeenCalled();
+    expect(detectStoryPointsFieldIdMock).not.toHaveBeenCalled();
+
+    await runJsonSearch({ jql: 'x', json: true, fields: 'sprint,storyPoints' });
+    expect(detectSprintFieldIdMock).toHaveBeenCalled();
+    expect(searchIssuesMock.mock.calls[1][1].fields).toEqual(
+      expect.arrayContaining(['customfield_10020', 'customfield_10030'])
+    );
   });
 
   it('prints "No matching issues." when empty + TTY', async () => {
