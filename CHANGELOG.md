@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-08-01
+
 ### Added
 
 - `search --description-format <markdown|adf|both>` chooses how an opt-in `description` is rendered
@@ -391,6 +393,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   except macOS without Homebrew, where it defaults to no (since setup may
   cascade into a long Homebrew + Xcode CLT install).
 
+[0.13.1]: https://github.com/doryski/jirallm/releases/tag/v0.13.1
 [0.13.0]: https://github.com/doryski/jirallm/releases/tag/v0.13.0
 [0.12.0]: https://github.com/doryski/jirallm/releases/tag/v0.12.0
 [0.11.0]: https://github.com/doryski/jirallm/releases/tag/v0.11.0
