@@ -6,6 +6,9 @@ import {
   PRESETS,
   SEARCH_ALWAYS_FETCH,
   SEARCH_DEFAULT_KEYS,
+  deriveSelectorMode,
+  findUnknownFieldNames,
+  formatUnknownFieldNamesError,
   hasSprintRequested,
   hasStoryPointsRequested,
   normalizeFieldName,
@@ -52,8 +55,10 @@ describe('normalizeFieldName', () => {
 describe('parseFieldsFlag', () => {
   it('returns raw tokens in bare position, leaving normalization to resolveFieldSet', () => {
     expect(parseFieldsFlag('key,issuetype,duedate')).toEqual({
+      preset: undefined,
       include: ['key', 'issuetype', 'duedate'],
       exclude: [],
+      mode: 'replace',
     });
   });
 
@@ -62,17 +67,38 @@ describe('parseFieldsFlag', () => {
       preset: 'all',
       include: ['issuelinks'],
       exclude: ['resolutiondate'],
+      mode: 'merge',
     });
   });
 
   it('keeps preset tokens as presets rather than normalizing them', () => {
-    expect(parseFieldsFlag('default')).toEqual({ preset: 'default', include: [], exclude: [] });
+    expect(parseFieldsFlag('default')).toEqual({
+      preset: 'default',
+      include: [],
+      exclude: [],
+      mode: 'merge',
+    });
   });
 
   it('parses a preset name alone', () => {
-    expect(parseFieldsFlag('all')).toEqual({ preset: 'all', include: [], exclude: [] });
-    expect(parseFieldsFlag('minimal')).toEqual({ preset: 'minimal', include: [], exclude: [] });
-    expect(parseFieldsFlag('default')).toEqual({ preset: 'default', include: [], exclude: [] });
+    expect(parseFieldsFlag('all')).toEqual({
+      preset: 'all',
+      include: [],
+      exclude: [],
+      mode: 'merge',
+    });
+    expect(parseFieldsFlag('minimal')).toEqual({
+      preset: 'minimal',
+      include: [],
+      exclude: [],
+      mode: 'merge',
+    });
+    expect(parseFieldsFlag('default')).toEqual({
+      preset: 'default',
+      include: [],
+      exclude: [],
+      mode: 'merge',
+    });
   });
 
   it('parses +/- additive operators on top of default', () => {
@@ -80,13 +106,16 @@ describe('parseFieldsFlag', () => {
       preset: undefined,
       include: ['sprint', 'storyPoints'],
       exclude: ['creator'],
+      mode: 'merge',
     });
   });
 
   it('parses bare names as an exact custom list', () => {
     expect(parseFieldsFlag('key,status,labels')).toEqual({
+      preset: undefined,
       include: ['key', 'status', 'labels'],
       exclude: [],
+      mode: 'replace',
     });
   });
 
@@ -95,6 +124,7 @@ describe('parseFieldsFlag', () => {
       preset: 'all',
       include: ['severity'],
       exclude: ['creator'],
+      mode: 'merge',
     });
   });
 
@@ -103,7 +133,54 @@ describe('parseFieldsFlag', () => {
       preset: 'all',
       include: ['x'],
       exclude: ['y'],
+      mode: 'merge',
     });
+  });
+
+  it('marks a lone + token as merge mode (issue #23)', () => {
+    expect(parseFieldsFlag('+priority')).toEqual({
+      preset: undefined,
+      include: ['priority'],
+      exclude: [],
+      mode: 'merge',
+    });
+  });
+
+  it('drops a bare + token while still counting it as additive (issue #23)', () => {
+    expect(parseFieldsFlag('+')).toEqual({
+      preset: undefined,
+      include: [],
+      exclude: [],
+      mode: 'merge',
+    });
+  });
+
+  it('drops a bare - token while still counting it as additive (issue #23)', () => {
+    expect(parseFieldsFlag('-')).toEqual({
+      preset: undefined,
+      include: [],
+      exclude: [],
+      mode: 'merge',
+    });
+  });
+
+  it('drops a bare + token but keeps its siblings (issue #23)', () => {
+    expect(parseFieldsFlag('+,+labels')).toEqual({
+      preset: undefined,
+      include: ['labels'],
+      exclude: [],
+      mode: 'merge',
+    });
+  });
+
+  it('strips only one +/- prefix so a doubled prefix stays an unknown name (issue #23)', () => {
+    expect(parseFieldsFlag('++labels')).toEqual({
+      preset: undefined,
+      include: ['+labels'],
+      exclude: [],
+      mode: 'merge',
+    });
+    expect(findUnknownFieldNames(parseFieldsFlag('++labels'))).toEqual(['+labels']);
   });
 });
 
@@ -318,6 +395,161 @@ describe('resolveFieldSet passThroughUnknown', () => {
     expect(r.jiraFieldIds).toContain('duedate');
     expect(r.jiraFieldIds).not.toContain('sprint');
     expect(r.jiraFieldIds.some((id) => id.startsWith('__'))).toBe(false);
+  });
+});
+
+describe('resolveFieldSet additive merge (issue #23)', () => {
+  it('merges a lone +name into the default preset instead of replacing it', () => {
+    const r = resolveFieldSet(parseFieldsFlag('+priority'));
+    for (const key of PRESETS.default) expect(r.friendlyKeys).toContain(key);
+    expect(r.friendlyKeys).toContain('priority');
+    expect(r.friendlyKeys).toHaveLength(PRESETS.default.length);
+  });
+
+  it('merges a lone +name that is not part of the default preset', () => {
+    const r = resolveFieldSet(parseFieldsFlag('+resolution'));
+    for (const key of PRESETS.default) expect(r.friendlyKeys).toContain(key);
+    expect(r.friendlyKeys).toContain('resolution');
+    expect(r.friendlyKeys).toHaveLength(PRESETS.default.length + 1);
+  });
+
+  it('still merges when +name and -name are combined', () => {
+    const r = resolveFieldSet(parseFieldsFlag('+resolution,-creator'));
+    expect(r.friendlyKeys).toContain('resolution');
+    expect(r.friendlyKeys).not.toContain('creator');
+    for (const key of PRESETS.default) expect(r.friendlyKeys).toContain(key);
+  });
+
+  it('still replaces exactly for a bare-name list', () => {
+    const r = resolveFieldSet(parseFieldsFlag('key,status,labels'));
+    expect(new Set(r.friendlyKeys)).toEqual(new Set(['key', 'status', 'labels']));
+  });
+
+  it('still subtracts a lone -name from the default preset', () => {
+    const r = resolveFieldSet(parseFieldsFlag('-parent'));
+    expect(new Set(r.friendlyKeys)).toEqual(
+      new Set(PRESETS.default.filter((key) => key !== 'parent'))
+    );
+  });
+
+  it('still subtracts a lone -name from supplied defaultKeys', () => {
+    const r = resolveFieldSet(parseFieldsFlag('-parent'), {}, { defaultKeys: SEARCH_DEFAULT_KEYS });
+    expect(new Set(r.friendlyKeys)).toEqual(
+      new Set(SEARCH_DEFAULT_KEYS.filter((key) => key !== 'parent'))
+    );
+  });
+
+  it('merges a lone +name into supplied defaultKeys rather than the default preset', () => {
+    const r = resolveFieldSet(
+      parseFieldsFlag('+resolution'),
+      {},
+      { defaultKeys: SEARCH_DEFAULT_KEYS }
+    );
+    expect(new Set(r.friendlyKeys)).toEqual(new Set([...SEARCH_DEFAULT_KEYS, 'resolution']));
+  });
+
+  it('never yields an empty-string friendly key for a bare + token (issue #23)', () => {
+    const r = resolveFieldSet(parseFieldsFlag('+'));
+    expect(r.friendlyKeys).not.toContain('');
+    expect(new Set(r.friendlyKeys)).toEqual(new Set(PRESETS.default));
+    expect(findUnknownFieldNames(parseFieldsFlag('+'))).toEqual([]);
+  });
+
+  it('treats a config-style selector without a mode as an exact replacement list', () => {
+    const r = resolveFieldSet({ include: ['key', 'priority'] });
+    expect(new Set(r.friendlyKeys)).toEqual(new Set(['key', 'priority']));
+  });
+});
+
+describe('deriveSelectorMode (issue #23)', () => {
+  it('lets an explicit mode win over the heuristic in both directions', () => {
+    expect(deriveSelectorMode({ include: ['key'], mode: 'merge' })).toBe('merge');
+    expect(deriveSelectorMode({ include: ['key'], exclude: ['status'], mode: 'replace' })).toBe(
+      'replace'
+    );
+  });
+
+  it('infers replace for an include-only selector', () => {
+    expect(deriveSelectorMode({ include: ['key', 'status'], exclude: [] })).toBe('replace');
+  });
+
+  it('infers merge when include and exclude are both present', () => {
+    expect(deriveSelectorMode({ include: ['key'], exclude: ['status'] })).toBe('merge');
+  });
+
+  it('infers merge for an exclude-only selector', () => {
+    expect(deriveSelectorMode({ include: [], exclude: ['status'] })).toBe('merge');
+  });
+
+  it('infers merge for an empty or undefined selector', () => {
+    expect(deriveSelectorMode({})).toBe('merge');
+    expect(deriveSelectorMode(undefined)).toBe('merge');
+  });
+
+  it('infers replace for a config-style selector with exclude undefined', () => {
+    expect(deriveSelectorMode({ include: ['key', 'priority'] })).toBe('replace');
+  });
+});
+
+describe('findUnknownFieldNames (issue #23)', () => {
+  it('returns an empty list for a valid selector', () => {
+    expect(findUnknownFieldNames(parseFieldsFlag('key,status,labels'))).toEqual([]);
+  });
+
+  it('returns an empty list for an undefined selector', () => {
+    expect(findUnknownFieldNames(undefined)).toEqual([]);
+  });
+
+  it('flags a misspelled include name', () => {
+    expect(findUnknownFieldNames(parseFieldsFlag('key,issuelinkz'))).toEqual(['issuelinkz']);
+  });
+
+  it('flags a misspelled exclude name', () => {
+    expect(findUnknownFieldNames(parseFieldsFlag('default,-issuelinkz'))).toEqual(['issuelinkz']);
+  });
+
+  it('does not flag raw Jira ID aliases that normalize to built-ins', () => {
+    expect(findUnknownFieldNames(parseFieldsFlag('duedate,issuelinks,created'))).toEqual([]);
+  });
+
+  it('does not flag a configured custom field key', () => {
+    const defs: CustomFieldDefs = { severity: { id: 'customfield_99999', type: 'select' } };
+    expect(findUnknownFieldNames(parseFieldsFlag('key,+severity'), defs)).toEqual([]);
+  });
+
+  it('de-duplicates while preserving source order', () => {
+    expect(findUnknownFieldNames(parseFieldsFlag('zeta,alpha,zeta,-alpha'))).toEqual([
+      'zeta',
+      'alpha',
+    ]);
+  });
+});
+
+describe('formatUnknownFieldNamesError (issue #23)', () => {
+  it('quotes the unknown name and lists the valid built-ins', () => {
+    const msg = formatUnknownFieldNamesError(['issuelinkz']);
+    expect(msg).toContain('"issuelinkz"');
+    expect(msg).toContain('issueLinks');
+    expect(msg).toContain('storyPoints');
+    expect(msg).not.toContain('custom fields');
+  });
+
+  it('lists configured custom field keys only when defs are supplied', () => {
+    const defs: CustomFieldDefs = { severity: { id: 'customfield_99999', type: 'select' } };
+    const msg = formatUnknownFieldNamesError(['issuelinkz'], defs);
+    expect(msg).toContain('severity');
+    expect(msg).toContain('custom fields');
+  });
+
+  it('hints that presets take no +/- prefix when the unknown name is a preset (issue #23)', () => {
+    const msg = formatUnknownFieldNamesError(['all']);
+    expect(msg).toContain('Preset names');
+    expect(msg).toContain('minimal');
+    expect(msg).toContain('without a +/- prefix');
+  });
+
+  it('omits the preset hint for a plain misspelling (issue #23)', () => {
+    expect(formatUnknownFieldNamesError(['issuelinkz'])).not.toContain('Preset names');
   });
 });
 

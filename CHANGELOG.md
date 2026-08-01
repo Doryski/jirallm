@@ -45,6 +45,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   there instead of appending it. Matches the basename or the path passed on the command line, works
   with `--no-wiki`, and warns (leaving the text alone) when nothing matches.
 
+### Fixed
+
+- `--fields "+name"` now adds to the current field set instead of replacing it (#23). Previously a
+  lone `+name` (with no `-name` alongside it and no explicit preset) was indistinguishable from a
+  bare replacement list, so asking for one extra field silently discarded the rest of the preset —
+  `fetch PROJ-1 --fields "+priority"` returned a single field instead of the default set plus
+  `priority`. `+name`/`-name` now consistently adjust the current set across `export`, `fetch` and
+  `search`; a bare comma list or an explicit preset still replaces it.
+- Unrecognised `--fields` names are now rejected instead of being silently dropped (#23). A typo
+  such as `--fields "+issuelinkz"` previously yielded no data and no diagnostic; `fetch` and
+  `export` now fail with the offending name and the list of valid ones. `search` still passes
+  unmapped raw Jira field IDs (`customfield_10050`, `environment`) straight through, as documented.
+- `export --fields` adjustments now compose with the org's configured `[orgs.X.export.fields]` base
+  rather than discarding it (#23). An unrecognised name coming from config warns and continues, so a
+  stale config cannot hard-fail an export.
+
 ### Notes
 
 - Content is still posted through REST v2 (wiki markup) so Jira keeps generating the ADF for tables,

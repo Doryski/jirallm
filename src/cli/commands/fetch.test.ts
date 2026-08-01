@@ -264,6 +264,47 @@ describe('runFetch', () => {
     );
   });
 
+  it('--fields "+priority" widens rather than narrows the requested Jira field set (issue #23)', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runFetch({ issueKey: 'PROJ-1', org: 'acme', json: true, fields: '+priority' });
+    const { jiraFieldIds } = fetchIssueDetailsMock.mock.calls[0][1];
+    for (const id of DEFAULT_FIELD_IDS) expect(jiraFieldIds).toContain(id);
+  });
+
+  it('rejects an unrecognised --fields name instead of silently dropping it (issue #23)', async () => {
+    await expect(
+      runFetch({ issueKey: 'PROJ-1', org: 'acme', json: true, fields: '+issuelinkz' })
+    ).rejects.toThrow(/issuelinkz/s);
+    expect(fetchIssueDetailsMock).not.toHaveBeenCalled();
+  });
+
+  it('accepts a configured org custom field key passed via --fields (issue #23)', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    const customFieldDefs = { team: { id: 'customfield_10050', type: 'select' as const } };
+    loadProfileMock.mockResolvedValueOnce({
+      config: { baseUrl: 'https://x', userEmail: 'u@x', projectKey: 'PROJ' },
+      org: {
+        name: 'solo',
+        baseUrl: 'https://x',
+        userEmail: 'u@x',
+        projects: {},
+        export: { customFieldDefs },
+      },
+      project: { key: 'PROJ' },
+      apiToken: 'tok',
+    });
+    await runFetch({ issueKey: 'PROJ-1', org: 'acme', json: true, fields: '+team' });
+    const { jiraFieldIds } = fetchIssueDetailsMock.mock.calls[0][1];
+    expect(jiraFieldIds).toContain('customfield_10050');
+  });
+
+  it('accepts a raw Jira id alias in --fields (issue #23)', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runFetch({ issueKey: 'PROJ-1', org: 'acme', json: true, fields: '+duedate' });
+    const { jiraFieldIds } = fetchIssueDetailsMock.mock.calls[0][1];
+    expect(jiraFieldIds).toContain('duedate');
+  });
+
   it('passes org custom field defs into the fetch', async () => {
     Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
     const customFieldDefs = { team: { id: 'customfield_10050', type: 'select' as const } };

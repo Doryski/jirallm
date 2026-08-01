@@ -34,3 +34,4 @@ tmp/
 
 # meta-develop evidence (local, not tracked)
 evidence/
+.evidence/

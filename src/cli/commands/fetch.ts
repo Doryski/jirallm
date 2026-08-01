@@ -1,7 +1,12 @@
 import { loadProfile } from '../../lib/config.js';
 import { JiraClient } from '../../lib/jiraClient.js';
 import type { JiraTaskData } from '../../lib/jiraClient.js';
-import { parseFieldsFlag, resolveFieldSet } from '../../lib/exportFields.js';
+import {
+  findUnknownFieldNames,
+  formatUnknownFieldNamesError,
+  parseFieldsFlag,
+  resolveFieldSet,
+} from '../../lib/exportFields.js';
 import { parseIssueKeyArgs } from '../issueKey.js';
 import { resolveOrg } from '../resolveOrg.js';
 import { printJson, shouldOutputJson } from '../jsonOutput.js';
@@ -102,6 +107,10 @@ export async function runFetch(opts: FetchOptions): Promise<void> {
 
   const customFieldDefs = profile.org.export?.customFieldDefs ?? {};
   const fieldSelector = opts.fields ? parseFieldsFlag(opts.fields) : undefined;
+  const unknownFields = findUnknownFieldNames(fieldSelector, customFieldDefs);
+  if (unknownFields.length > 0) {
+    throw new Error(formatUnknownFieldNamesError(unknownFields, customFieldDefs));
+  }
   const resolved = resolveFieldSet(fieldSelector, customFieldDefs);
 
   const data = await client.fetchIssueDetails(key, {

@@ -92,10 +92,14 @@ export const PRESETS = {
 
 export type PresetName = keyof typeof PRESETS;
 
+export const FIELD_SELECTOR_MODES = ['replace', 'merge'] as const;
+export type FieldSelectorMode = (typeof FIELD_SELECTOR_MODES)[number];
+
 export type FieldSelector = {
   preset?: PresetName;
   include?: string[];
   exclude?: string[];
+  mode?: FieldSelectorMode;
 };
 
 export const CUSTOM_FIELD_TYPES = ['scalar', 'select', 'user', 'sprint', 'number', 'array'] as const;
@@ -143,25 +147,22 @@ export function parseFieldsFlag(raw: string): FieldSelector {
       continue;
     }
     if (tok.startsWith('+')) {
-      include.push(tok.slice(1));
+      if (tok.length > 1) include.push(tok.slice(1));
       continue;
     }
     if (tok.startsWith('-')) {
-      exclude.push(tok.slice(1));
+      if (tok.length > 1) exclude.push(tok.slice(1));
       continue;
     }
     // bare name → replacement mode (no preset implied unless above)
     include.push(tok);
   }
 
-  // If no preset and only bare names (no +/-), treat as custom list (preset=undefined, include=names).
-  // The resolver will treat preset=undefined as "exactly the include list".
+  // Only bare names (no preset, no +/-) mean "exactly this list"; anything else merges.
   const hasAdditive = tokens.some((t) => t.startsWith('+') || t.startsWith('-'));
-  if (!preset && !hasAdditive && include.length > 0) {
-    return { include, exclude: [] };
-  }
+  const isReplace = !preset && !hasAdditive && include.length > 0;
 
-  return { preset, include, exclude };
+  return { preset, include, exclude, mode: isReplace ? 'replace' : 'merge' };
 }
 
 function normalizeSelectorTokens(
@@ -170,6 +171,14 @@ function normalizeSelectorTokens(
 ): string[] | undefined {
   if (!tokens) return undefined;
   return tokens.map((t) => (Object.hasOwn(customFieldDefs, t) ? t : normalizeFieldName(t)));
+}
+
+export function deriveSelectorMode(selector: FieldSelector | undefined): FieldSelectorMode {
+  if (selector?.mode) return selector.mode;
+  const include = selector?.include ?? [];
+  const exclude = selector?.exclude ?? [];
+  if (include.length > 0 && exclude.length === 0) return 'replace';
+  return 'merge';
 }
 
 export function resolveFieldSet(
@@ -183,12 +192,14 @@ export function resolveFieldSet(
   const include = normalizeSelectorTokens(selector?.include, customFieldDefs);
   const exclude = normalizeSelectorTokens(selector?.exclude, customFieldDefs);
 
+  const effectiveMode = deriveSelectorMode(selector);
+
   let base: string[];
   if (!selector || (!selector.preset && !include && !exclude)) {
     base = [...defaultKeys];
   } else if (selector.preset) {
     base = [...PRESETS[selector.preset]];
-  } else if (include && include.length > 0 && !exclude?.length) {
+  } else if (effectiveMode === 'replace' && include && include.length > 0) {
     // bare-name mode: exact set from include
     base = [...include];
   } else {
@@ -229,6 +240,43 @@ export function resolveFieldSet(
     friendlyKeys,
     jiraFieldIds: [...jiraIds],
   };
+}
+
+function isKnownFieldName(name: string, customFieldDefs: CustomFieldDefs): boolean {
+  if (BUILT_IN_FIELD_SET.has(name)) return true;
+  if (Object.hasOwn(customFieldDefs, name)) return true;
+  return name.startsWith('__');
+}
+
+export function findUnknownFieldNames(
+  selector: FieldSelector | undefined,
+  customFieldDefs: CustomFieldDefs = {}
+): string[] {
+  if (!selector) return [];
+  const names = [
+    ...(normalizeSelectorTokens(selector.include, customFieldDefs) ?? []),
+    ...(normalizeSelectorTokens(selector.exclude, customFieldDefs) ?? []),
+  ];
+  const unknown = names.filter((name) => !isKnownFieldName(name, customFieldDefs));
+  return [...new Set(unknown)];
+}
+
+export function formatUnknownFieldNamesError(
+  unknownNames: string[],
+  customFieldDefs: CustomFieldDefs = {}
+): string {
+  const label = unknownNames.length > 1 ? 'fields' : 'field';
+  const quoted = unknownNames.map((name) => `"${name}"`).join(', ');
+  const customKeys = Object.keys(customFieldDefs);
+  const custom = customKeys.length ? ` Configured custom fields: ${customKeys.join(', ')}.` : '';
+  const presetNames = Object.keys(PRESETS);
+  const usedPresets = unknownNames.filter((name) => presetNames.includes(name));
+  const presetHint = usedPresets.length
+    ? ` Preset names (${presetNames.join(', ')}) are used without a +/- prefix, e.g. --fields "${usedPresets[0]},+labels".`
+    : '';
+  return `Unknown ${label} ${quoted}. Valid fields: ${BUILT_IN_FIELDS.join(
+    ', '
+  )}.${custom}${presetHint}`;
 }
 
 export function hasSprintRequested(friendlyKeys: string[], customFieldDefs: CustomFieldDefs): boolean {

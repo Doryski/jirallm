@@ -118,14 +118,17 @@ const argAt = (mock: ReturnType<typeof vi.fn>, index: number): unknown => mock.m
 
 let logs: string[];
 let errs: string[];
+let warns: string[];
 const originalArgv = process.argv;
 
 beforeEach(() => {
   vi.clearAllMocks();
   logs = [];
   errs = [];
+  warns = [];
   vi.spyOn(console, 'log').mockImplementation((...a) => { logs.push(a.map(String).join(' ')); });
   vi.spyOn(console, 'error').mockImplementation((...a) => { errs.push(a.map(String).join(' ')); });
+  vi.spyOn(console, 'warn').mockImplementation((...a) => { warns.push(a.map(String).join(' ')); });
   vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
     throw new Error(`exit:${code ?? 0}`);
   }) as never);
@@ -601,5 +604,112 @@ describe('default export command', () => {
     listOrgsMock.mockReturnValue([]);
     await expect(run([])).rejects.toThrow('exit:0');
     expect(runInitMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('export --fields validation (issue #23)', () => {
+  const mockProfile = (org: Record<string, unknown>) => {
+    listOrgsMock.mockReturnValue(['acme']);
+    resolveOrgInteractiveMock.mockResolvedValue('acme');
+    loadProfileMock.mockResolvedValue({
+      config: { baseUrl: 'https://x', userEmail: 'u@x' },
+      org,
+      project: { key: 'PROJ' },
+      apiToken: 'tok',
+    });
+  };
+
+  const planLine = (label: string): string => {
+    const line = logs.find((entry) => entry.trim().startsWith(label));
+    if (!line) return '';
+    return line.slice(line.indexOf(label) + label.length).trim();
+  };
+
+  const frontmatterFields = (): string[] => {
+    const value = planLine('Frontmatter fields:');
+    if (!value) return [];
+    return value.split(',').map((name) => name.trim());
+  };
+
+  it('errors and exits 1 on an unrecognised --fields name', async () => {
+    mockProfile({});
+    await expect(run(['PROJ-123', '--fields', '+issuelinkz', '--dry-run'])).rejects.toThrow('exit:1');
+    expect(errs.join('\n')).toContain('issuelinkz');
+    expect(exportIssuesMock).not.toHaveBeenCalled();
+  });
+
+  it('accepts a configured custom-field key in --fields', async () => {
+    mockProfile({
+      export: { customFieldDefs: { team: { id: 'customfield_10050', type: 'select' } } },
+    });
+    await run(['PROJ-123', '--fields', '+team', '--dry-run']);
+    expect(errs).toEqual([]);
+    expect(logs.join('\n')).toContain('team');
+  });
+
+  it('rejects an unrecognised --fields name even when credentials come from flags', async () => {
+    mockProfile({});
+    await expect(
+      run([
+        'PROJ-123', '--fields', '+issuelinkz', '--dry-run',
+        '--base-url', 'https://x', '--user-email', 'u@x', '--api-token', 'tok',
+      ])
+    ).rejects.toThrow('exit:1');
+    expect(errs.join('\n')).toContain('issuelinkz');
+  });
+
+  it('warns but continues when a stale config selector names an unknown field', async () => {
+    mockProfile({ export: { fieldSelector: { include: ['oldField'] } } });
+    await run(['PROJ-123', '--dry-run']);
+    expect(warns.join('\n')).toContain('Warning: ');
+    expect(warns.join('\n')).toContain('oldField');
+    expect(errs).toEqual([]);
+    expect(logs.join('\n')).toContain('Dry run');
+  });
+
+  it('merges +name from the flag into the configured preset rather than the default set', async () => {
+    mockProfile({ export: { fieldSelector: { preset: 'minimal' } } });
+    await run(['PROJ-123', '--fields', '+labels', '--dry-run']);
+    expect(frontmatterFields()).toEqual([
+      'key', 'status', 'issueType', 'parent', 'epic', 'subtasks', 'labels',
+    ]);
+  });
+
+  it('keeps a merge-style config base (include + exclude) intact when a +name flag is added', async () => {
+    mockProfile({ export: { fieldSelector: { include: ['key'], exclude: ['status'] } } });
+    await run(['PROJ-123', '--dry-run']);
+    const withoutFlag = frontmatterFields();
+    logs.length = 0;
+    await run(['PROJ-123', '--fields', '+labels', '--dry-run']);
+    expect(frontmatterFields()).toEqual(withoutFlag);
+    expect(withoutFlag).toHaveLength(17);
+    expect(withoutFlag).not.toContain('status');
+  });
+
+  it('lets a +name flag re-add a field the config selector excluded', async () => {
+    mockProfile({ export: { fieldSelector: { include: ['key'], exclude: ['labels'] } } });
+    await run(['PROJ-123', '--fields', '+labels', '--dry-run']);
+    expect(frontmatterFields()).toContain('labels');
+    expect(planLine('exclude:')).toBe('');
+  });
+
+  it('does not repeat an exclude the config and the flag both name', async () => {
+    mockProfile({ export: { fieldSelector: { preset: 'minimal', exclude: ['parent'] } } });
+    await run(['PROJ-123', '--fields=-parent', '--dry-run']);
+    expect(planLine('exclude:')).toBe('parent');
+    expect(frontmatterFields()).not.toContain('parent');
+  });
+
+  it('lets a flag preset override the configured base outright', async () => {
+    mockProfile({ export: { fieldSelector: { preset: 'minimal' } } });
+    await run(['PROJ-123', '--fields', 'all,+labels', '--dry-run']);
+    expect(frontmatterFields()).toContain('priority');
+    expect(planLine('Field preset:')).toBe('all');
+  });
+
+  it('lets a bare flag list override the configured base outright', async () => {
+    mockProfile({ export: { fieldSelector: { preset: 'minimal' } } });
+    await run(['PROJ-123', '--fields', 'key,status', '--dry-run']);
+    expect(frontmatterFields()).toEqual(['key', 'status']);
   });
 });

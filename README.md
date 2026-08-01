@@ -124,6 +124,32 @@ jirallm auth rm  --org acme         # remove stored token
 
 CLI flags (`--base-url`, `--output-dir`, `--fps`, …) override whatever the resolved config produces.
 
+### Export field selection
+
+The frontmatter fields written by `jirallm <key>` / `jirallm export` default to the `default` preset. An org can pin its own base set, and declare the custom fields it cares about:
+
+```toml
+[orgs.acme.export.fields]
+preset  = "minimal"          # "all" | "default" | "minimal" — optional
+include = ["labels"]         # extra fields on top of the preset
+exclude = ["subtasks"]       # fields to drop
+
+[orgs.acme.export.custom_fields.team]
+id   = "customfield_10050"
+type = "select"
+```
+
+`--fields` then composes with that configured base:
+
+```bash
+jirallm PROJ-7 --fields "+labels"          # adds labels to the configured base
+jirallm PROJ-7 --fields "-parent"          # removes parent from the configured base
+jirallm PROJ-7 --fields all                # explicit preset replaces the configured base
+jirallm PROJ-7 --fields "key,status"       # bare list replaces the configured base
+```
+
+Only `+name` / `-name` adjustments compose; a bare comma list or an explicit preset in the flag replaces the config base outright. Valid names are the friendly field names, their raw-ID aliases (`duedate`, `issuelinks`), and any configured custom-field key — anything else is rejected with an error. An unknown name coming from the config block is reported as a warning and skipped, so a stale config never blocks an export.
+
 ## Quick start
 
 ### CLI
@@ -217,10 +243,11 @@ jirallm sprints 123 --org acme --state active --json
 jirallm issuetypes --org acme --project PROJ --json
 jirallm linktypes --org acme --json
 jirallm search 'assignee = currentUser() AND statusCategory != Done' --org acme --limit 25 --json
-jirallm search 'project = PROJ' --org acme --fields default,+labels --json  # --fields shapes the JSON rows too (same vocabulary as `fetch`; raw Jira field IDs accepted)
+jirallm search 'project = PROJ' --org acme --fields default,+labels --json  # --fields shapes the JSON rows too (same vocabulary as `fetch`; `search` alone also accepts unmapped raw Jira field IDs such as customfield_10050)
 jirallm search 'parent in (PROJ-100, PROJ-200)' --org acme --json  # rows carry `parent` ({key, title, status, issueType, priority} — the last two omitted when Jira has none) by default; drop it with `--fields -parent`
 jirallm fetch PROJ-123 --json
 jirallm fetch PROJ-123 --fields all --json      # widen the field set (components, labels, custom fields, ...)
+jirallm fetch PROJ-123 --fields +priority --json  # +name adds to the current set, -name removes; fetch/export accept friendly names, their raw-ID aliases (duedate, issuelinks) and configured custom-field keys — anything else is an error
 jirallm fetch PROJ-123 --raw | jq '.fields.labels'  # complete, untransformed Jira field object
 jirallm fetch PROJ-123 --rendered | jq -r '.renderedFields.description'  # Jira-rendered HTML
 jirallm fetch PROJ-123 --expand changelog,renderedFields  # pass arbitrary Jira expand params

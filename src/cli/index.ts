@@ -45,7 +45,14 @@ import { runLink, runLinkRemove } from './commands/link.js';
 import { runAttach, runAttachRemove } from './commands/attach.js';
 import { runWatchers } from './commands/watchers.js';
 import { runUpgrade } from './commands/upgrade.js';
-import { parseFieldsFlag, resolveFieldSet } from '../lib/exportFields.js';
+import {
+  deriveSelectorMode,
+  findUnknownFieldNames,
+  formatUnknownFieldNamesError,
+  parseFieldsFlag,
+  resolveFieldSet,
+} from '../lib/exportFields.js';
+import type { CustomFieldDefs, FieldSelector } from '../lib/exportFields.js';
 
 type ExportFlags = {
   org?: string;
@@ -82,6 +89,40 @@ async function resolveOrgAndKeys(
   return { org, projectKey, keys };
 }
 
+function isAdjustmentSelector(selector: FieldSelector): boolean {
+  return selector.mode === 'merge' && !selector.preset;
+}
+
+function mergeFieldSelectors(base: FieldSelector, adjustments: FieldSelector): FieldSelector {
+  const include = adjustments.include ?? [];
+  const exclude = adjustments.exclude ?? [];
+  const baseInclude = base.preset ? [] : base.include ?? [];
+  const baseExclude = (base.exclude ?? []).filter((name) => !include.includes(name));
+  const keepsBaseAsExactSet =
+    !base.preset && baseInclude.length > 0 && deriveSelectorMode(base) === 'replace';
+  return {
+    preset: base.preset,
+    include: [...new Set([...baseInclude, ...include])],
+    exclude: [...new Set([...baseExclude, ...exclude])],
+    mode: keepsBaseAsExactSet ? 'replace' : 'merge',
+  };
+}
+
+function reportUnknownFieldNames(
+  names: string[],
+  customFieldDefs: CustomFieldDefs,
+  fatal: boolean
+): void {
+  if (names.length === 0) return;
+  const message = formatUnknownFieldNamesError(names, customFieldDefs);
+  if (!fatal) {
+    console.warn(`Warning: ${message}`);
+    return;
+  }
+  console.error(message);
+  process.exit(1);
+}
+
 async function runExport(rawArgs: string[], flags: ExportFlags, program: Command): Promise<void> {
   if (rawArgs.length === 0) {
     if (listOrgs().length > 0) {
@@ -101,8 +142,9 @@ async function runExport(rawArgs: string[], flags: ExportFlags, program: Command
   let videoEnabled = flags.videoFrames;
   let fps = flags.fps ? parseInt(flags.fps, 10) : 5;
   let maxFrames = flags.maxFrames ? parseInt(flags.maxFrames, 10) : 10;
-  let fieldSelector = flags.fields ? parseFieldsFlag(flags.fields) : undefined;
-  let customFieldDefs: import('../lib/exportFields.js').CustomFieldDefs | undefined;
+  const flagSelector = flags.fields ? parseFieldsFlag(flags.fields) : undefined;
+  let fieldSelector = flagSelector;
+  let customFieldDefs: CustomFieldDefs | undefined;
 
   let keys: string[];
   let org: string | undefined = flags.org;
@@ -131,8 +173,12 @@ async function runExport(rawArgs: string[], flags: ExportFlags, program: Command
         includeSubtasks = resolved.org.includeSubtasks;
       }
       if (resolved.org.export) {
-        if (!fieldSelector && resolved.org.export.fieldSelector) {
-          fieldSelector = resolved.org.export.fieldSelector;
+        const configSelector = resolved.org.export.fieldSelector;
+        if (configSelector && !flagSelector) {
+          fieldSelector = configSelector;
+        }
+        if (configSelector && flagSelector && isAdjustmentSelector(flagSelector)) {
+          fieldSelector = mergeFieldSelectors(configSelector, flagSelector);
         }
         if (resolved.org.export.customFieldDefs) {
           customFieldDefs = resolved.org.export.customFieldDefs;
@@ -154,6 +200,14 @@ async function runExport(rawArgs: string[], flags: ExportFlags, program: Command
       process.exit(1);
     }
   }
+
+  const fieldDefs = customFieldDefs ?? {};
+  const unknownFromFlag = findUnknownFieldNames(flagSelector, fieldDefs);
+  const unknownFromConfig = findUnknownFieldNames(fieldSelector, fieldDefs).filter(
+    (name) => !unknownFromFlag.includes(name)
+  );
+  reportUnknownFieldNames(unknownFromFlag, fieldDefs, true);
+  reportUnknownFieldNames(unknownFromConfig, fieldDefs, false);
 
   if (flags.dryRun) {
     const resolved = resolveFieldSet(fieldSelector, customFieldDefs ?? {});
@@ -256,7 +310,7 @@ function addExportOptions(cmd: Command): Command {
     .option('--include-subtasks', 'Fetch subtask metadata (may already be enabled via org config).')
     .option(
       '--fields <list>',
-      'Comma-separated friendly field names to include in frontmatter. Use +name/-name to add/remove, or "all" | "default" | "minimal".'
+      'Comma-separated friendly field names to include in frontmatter. Use +name to add a field to the current set and -name to remove one, or "all" | "default" | "minimal". Unrecognised names are an error.'
     )
     .option('--with-history', 'Include full field-change history (not just status changes)')
     .option('--with-worklog', 'Include worklogs')
@@ -826,7 +880,7 @@ program
   .option('--next-page-token <token>', 'Alias for --cursor')
   .option(
     '--fields <list>',
-    'Field set to include: preset (all|default|minimal), +add/-drop, or a bare comma list (raw Jira field IDs also accepted)'
+    'Field set to include: preset (all|default|minimal), +add/-drop, or a bare comma list. Unlike fetch/export, search also accepts unmapped raw Jira field IDs (e.g. customfield_10050, environment)'
   )
   .option('--json', 'Output JSON instead of human-readable')
   .action(async (jql: string, opts: Omit<import('./commands/search.js').SearchOptions, 'jql'>) => {
@@ -843,8 +897,11 @@ Output JSON includes "nextPageToken" — pass it back via --cursor for the next 
 
 --fields shapes the JSON rows, not just the Jira request: it uses the same
 vocabulary as \`fetch\` (presets, +add/-drop, bare list) and raw Jira field IDs
-are normalised too (issuetype → issueType, duedate → dueDate). Without it, rows
-stay key/summary/status/assignee/issueType/parent.
+are normalised too (issuetype → issueType, duedate → dueDate). \`search\` is the
+only command that also passes unmapped raw Jira field IDs straight through
+(customfield_10050, environment); \`fetch\` and \`export\` reject names outside
+their vocabulary. Without it, rows stay
+key/summary/status/assignee/issueType/parent.
 
 \`parent\` is in the default set, with the same normalised
 {key, title, status, issueType, priority} shape \`fetch\` returns (omitted when
@@ -1076,7 +1133,7 @@ program
   .option('--full', 'Include everything (comments, history, worklog, subtasks, links, attachments)')
   .option(
     '--fields <list>',
-    'Field set to include: preset (all|default|minimal), +add/-drop, or a bare comma list'
+    'Field set to include: preset (all|default|minimal), +name to add to the current set, -name to remove from it, or a bare comma list. Unrecognised names are an error.'
   )
   .option('--raw', 'Output the complete, untransformed Jira field object (all fields; implies JSON)')
   .option('--rendered', 'Include renderedFields (Jira-rendered HTML for description and other fields; implies raw JSON)')
@@ -1095,6 +1152,12 @@ priority, assignee, ...) plus any custom fields configured for the org. Use
 --fields to widen or narrow the set, or --raw to dump the untouched Jira
 field object (every field, including unconfigured custom fields) — handy for
 verifying what actually landed after a create/edit.
+
+With --fields, +name ADDS that field to the current set and -name REMOVES it,
+so \`--fields "+priority"\` keeps the default set and adds priority rather than
+narrowing to priority alone. A bare comma list replaces the set outright. Names
+that match neither a known field nor a configured custom field are rejected
+with an error instead of being silently dropped.
 
 --rendered adds a renderedFields object (Jira-rendered HTML) alongside the raw
 fields, so you can confirm a wiki-markup body rendered correctly. --expand lets
