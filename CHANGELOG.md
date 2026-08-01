@@ -20,30 +20,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it. Human-readable output labels the parent key on each line when present.
 - `ParentRef` is now a public type export (used by `JiraTaskData.parent` and
   `JiraTaskSummary.parent`).
-- `users <query>` (alias `user`): resolve any Jira user to their `accountId` by email, display name
-  or accountId prefix — no more `assign --dry-run` detour. Supports `-P/--project` and
-  `--issue` to restrict results to assignable users, `--limit`, and `me` as a query shorthand.
-- `--sprint <id|active|none>` on `create` and `edit`: a first-class Sprint flag. Pass a sprint id,
-  `active` to auto-resolve the project's scrum board's active sprint, or `none`/`null` to clear it —
-  no more `--field customfield_XXXXX:number=`. `--board <name>` disambiguates `active` when the
-  project has several scrum boards.
-- `--field name=` (empty) or `--field name=null` now clears any nullable field (writes JSON `null`),
-  for both friendly names and raw `customfield_NNNNN` ids.
-- `--attach-images <spec...>` on `comment`, `comment:edit`, `create` and `edit`: uploads images and
-  embeds them as ADF `mediaSingle` nodes instead of wiki thumbnails, so they can be sized and
-  aligned. Spec format is `file.png` or `file.png:"caption"`.
-- `--image-layout` (`center`, `align-start` (default), `align-end`, `wrap-left`, `wrap-right`,
-  `wide`, `full-width`) and `--image-width` (percent of container width, 1–100, default 50).
-- `--attach` on `create` and `edit` (embeds into the issue description).
-- Image pixel dimensions are read from the file header (PNG/JPEG/GIF/WEBP/BMP) and sent to Jira.
-- `--attach-images` now accepts **any** file type, and `--attach-media` is available as an alias:
-  - videos (`.mp4`, `.mov`, `.webm`, `.mkv`, …) are sized inline via `ffprobe`, falling back to
-    parsing `ffmpeg -i` output; without either binary the video still embeds, just unsized;
-  - non-media files (`.txt`, `.log`, `.har`, …) embed as a compact ADF `mediaGroup` tile instead of a
-    full-width attachment card, and consecutive uncaptioned files share one tile row.
-- Positional embedding: write `@@media:<file>@@` on its own line in the body to place a file exactly
-  there instead of appending it. Matches the basename or the path passed on the command line, works
-  with `--no-wiki`, and warns (leaving the text alone) when nothing matches.
+- Failed Jira requests now throw a `JiraApiError` carrying the response `status`, `body` and
+  `headers` instead of a flat `Error`, so callers can branch on the status code and read Jira's
+  error payload without re-issuing the request.
+
+### Security
+
+- Redirects to private or non-allowlisted hosts are refused. A Jira response redirecting to a
+  loopback, link-local or RFC 1918 address (or any host outside the configured site) no longer has
+  the request — and its `Authorization` header — followed to that target.
 
 ### Fixed
 
@@ -57,9 +42,85 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   such as `--fields "+issuelinkz"` previously yielded no data and no diagnostic; `fetch` and
   `export` now fail with the offending name and the list of valid ones. `search` still passes
   unmapped raw Jira field IDs (`customfield_10050`, `environment`) straight through, as documented.
+- `search --fields` now catches typos in those raw pass-through IDs (#23). A name outside jirallm's
+  vocabulary is verified against the instance's field catalog (one extra `GET /field`, made only
+  when such a name is present) and rejected with a closest-match suggestion instead of silently
+  producing an empty column. Only IDs are accepted — a display name is rejected with the ID to use
+  (`"Team" → "customfield_10050"`). `*all`/`*navigable` and `-name` exclusions are never checked, and
+  a catalog that cannot be read only warns, leaving the search to run as before.
 - `export --fields` adjustments now compose with the org's configured `[orgs.X.export.fields]` base
   rather than discarding it (#23). An unrecognised name coming from config warns and continues, so a
   stale config cannot hard-fail an export.
+- `search --json` rows are now shaped from the resolved `--fields` set (#20) instead of a fixed
+  projection, so a narrowed or widened selector is reflected in the emitted rows.
+
+## [0.12.0] - 2026-07-21
+
+### Added
+
+- `users <query>` (alias `user`): resolve any Jira user to their `accountId` by email, display name
+  or accountId prefix — no more `assign --dry-run` detour. Supports `-P/--project` and
+  `--issue` to restrict results to assignable users, `--limit`, and `me` as a query shorthand.
+- `--sprint <id|active|none>` on `create` and `edit`: a first-class Sprint flag. Pass a sprint id,
+  `active` to auto-resolve the project's scrum board's active sprint, or `none`/`null` to clear it —
+  no more `--field customfield_XXXXX:number=`. `--board <name>` disambiguates `active` when the
+  project has several scrum boards.
+- `--field name=` (empty) or `--field name=null` now clears any nullable field (writes JSON `null`),
+  for both friendly names and raw `customfield_NNNNN` ids.
+- `--attach-images` now accepts **any** file type, and `--attach-media` is available as an alias:
+  - videos (`.mp4`, `.mov`, `.webm`, `.mkv`, …) are sized inline via `ffprobe`, falling back to
+    parsing `ffmpeg -i` output; without either binary the video still embeds, just unsized;
+  - non-media files (`.txt`, `.log`, `.har`, …) embed as a compact ADF `mediaGroup` tile instead of a
+    full-width attachment card, and consecutive uncaptioned files share one tile row.
+- Positional embedding: write `@@media:<file>@@` on its own line in the body to place a file exactly
+  there instead of appending it. Matches the basename or the path passed on the command line, works
+  with `--no-wiki`, and warns (leaving the text alone) when nothing matches.
+- `fetch --rendered` adds `expand=renderedFields` and returns a `renderedFields` object alongside the
+  raw fields (implies raw JSON), so rich bodies can be verified as rendered HTML without dropping to
+  raw REST. `fetch --expand <list>` passes arbitrary Jira expand params through on the raw object.
+- `comment:ls --rendered` adds `expand=renderedBody` and includes `renderedBody` per comment
+  (implies JSON).
+- `--no-wiki` on `create` and `edit`, matching `comment --no-wiki`: the description is sent verbatim
+  instead of being converted markdown → wiki, so Jira wiki-markup templates (`h2.`, `#`, `{panel}`)
+  can be submitted as-is.
+- `attach --json` now emits the full attachment objects Jira returns (#19) — `self`, `mimeType`,
+  `created`, `content`, `thumbnail` and `author` — typed as `UploadedAttachment` rather than narrowed
+  to id/filename/size.
+
+### Fixed
+
+- `create --field` is now pre-flighted against the project + issue-type create screen (#12). Jira
+  silently drops (and defaults) custom fields that are not on the create screen, so values were lost
+  without any error; the command now aborts with the offending field ids before the POST, and
+  warns-and-proceeds when the screen cannot be fetched.
+
+## [0.11.0] - 2026-07-21
+
+### Added
+
+- `fetch` now resolves the shared `default` field preset (components, labels, priority, assignee, …)
+  and org custom fields (#3), so `--json` is no longer trimmed to key/title/status/description/
+  issueType. `--fields <list>` reuses the `export` preset/`+add`/`-drop` resolver.
+- `fetch --raw` dumps the untouched Jira field object (`fields=*all&expand=names`) for verifying what
+  actually landed after a `create` or `edit`, backed by a new `JiraClient.fetchIssueRaw`.
+
+### Fixed
+
+- `create`/`edit` `--components` is now repeatable (one literal name per occurrence, like
+  `-F/--field`) instead of comma-split (#2). Splitting on `,` tore a single valid component name
+  containing a comma (e.g. `"Foo, Bar & Baz"`) into non-existent ones.
+
+## [0.10.0] - 2026-07-20
+
+### Added
+
+- `--attach-images <spec...>` on `comment`, `comment:edit`, `create` and `edit`: uploads images and
+  embeds them as ADF `mediaSingle` nodes instead of wiki thumbnails, so they can be sized and
+  aligned. Spec format is `file.png` or `file.png:"caption"`.
+- `--image-layout` (`center`, `align-start` (default), `align-end`, `wrap-left`, `wrap-right`,
+  `wide`, `full-width`) and `--image-width` (percent of container width, 1–100, default 50).
+- `--attach` on `create` and `edit` (embeds into the issue description).
+- Image pixel dimensions are read from the file header (PNG/JPEG/GIF/WEBP/BMP) and sent to Jira.
 
 ### Notes
 
@@ -68,6 +129,88 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Captions are emitted as an italic (`em`) paragraph directly after the image. ADF's `caption` node
   is deliberately **not** used: Jira stores it but never renders it in comments (Confluence only).
 - `--attach` behaviour is unchanged (images still embed as `!file|thumbnail!`).
+
+## [0.9.0] - 2026-07-15
+
+### Added
+
+- `comment:edit` accepts attachments, matching `comment`.
+
+## [0.8.0] - 2026-07-15
+
+### Added
+
+- `comment:edit` for editing an existing comment.
+- `edit` now supports `parent` and due date.
+
+## [0.7.0] - 2026-07-08
+
+### Added
+
+- Attachments can be embedded in comments, and media is rendered when reading issues back.
+- Comment listings and issue details now include the full comment body instead of a truncated
+  preview.
+
+## [0.6.1] - 2026-07-07
+
+### Fixed
+
+- The CLI now runs when invoked through a symlinked `bin` (e.g. a `pnpm link`ed global install).
+
+## [0.6.0] - 2026-07-07
+
+### Added
+
+- Org and project context is inferred from the working directory and config, so most commands no
+  longer need explicit `-o/-P` flags.
+
+### Changed
+
+- Assorted CLI ergonomics and safety improvements around the inferred context.
+
+## [0.5.0] - 2026-07-05
+
+### Changed
+
+- Replaced the local video frame extractor with [`framewise`](https://www.npmjs.com/package/framewise).
+- Migrated the release pipeline to the shared
+  [`@doryski/release`](https://www.npmjs.com/package/@doryski/release) workflow.
+
+## [0.4.0] - 2026-07-04
+
+### Added
+
+- `export` subcommand, plus `--with-*` data flags on `fetch` and `export` for opting into extra
+  issue data.
+
+### Fixed
+
+- The release version is now derived from conventional commits.
+
+## [0.3.0] - 2026-06-09
+
+### Added
+
+- Custom field and component support on `create` and `edit`.
+
+## [0.2.0] - 2026-05-23
+
+### Added
+
+- Discovery, search and mutation commands: `me`, `projects`, `boards`, `sprints`, `issuetypes`,
+  `linktypes`, `search`, `fetch`, `create`, `edit`, `assign`, `link`, `attach`, `watchers`. Read
+  commands emit JSON when stdout is not a TTY; write commands accept `--dry-run`.
+- `comment` command with markdown → wiki conversion and chunking for long bodies.
+- `board:issues` and `transition` commands.
+- `worklog` command for batch Jira time logging.
+- `upgrade` command with a version check and update notifier.
+- Configurable field selection and custom fields on `export`.
+- Export results and the summary output now include file paths.
+- A `.gitignore` is auto-generated in the export output directory.
+
+### Changed
+
+- Flattened the frontmatter structure and enriched export item metadata.
 
 ## [0.1.1] - 2026-05-03
 
@@ -118,4 +261,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   except macOS without Homebrew, where it defaults to no (since setup may
   cascade into a long Homebrew + Xcode CLT install).
 
+[0.12.0]: https://github.com/doryski/jirallm/releases/tag/v0.12.0
+[0.11.0]: https://github.com/doryski/jirallm/releases/tag/v0.11.0
+[0.10.0]: https://github.com/doryski/jirallm/releases/tag/v0.10.0
+[0.9.0]: https://github.com/doryski/jirallm/releases/tag/v0.9.0
+[0.8.0]: https://github.com/doryski/jirallm/releases/tag/v0.8.0
+[0.7.0]: https://github.com/doryski/jirallm/releases/tag/v0.7.0
+[0.6.1]: https://github.com/doryski/jirallm/releases/tag/v0.6.1
+[0.6.0]: https://github.com/doryski/jirallm/releases/tag/v0.6.0
+[0.5.0]: https://github.com/doryski/jirallm/releases/tag/v0.5.0
+[0.4.0]: https://github.com/doryski/jirallm/releases/tag/v0.4.0
+[0.3.0]: https://github.com/doryski/jirallm/releases/tag/v0.3.0
+[0.2.0]: https://github.com/doryski/jirallm/releases/tag/v0.2.0
+[0.1.1]: https://github.com/doryski/jirallm/releases/tag/v0.1.1
 [0.1.0]: https://github.com/doryski/jirallm/releases/tag/v0.1.0

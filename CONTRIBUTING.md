@@ -57,7 +57,7 @@ Set up credentials by running `node dist/cli/index.js init` (writes `~/.config/j
 1. Fork the repo and create a feature branch from `main` (e.g. `feat/jql-pagination`)
 2. Make your changes in focused commits with clear messages
 3. Run `pnpm build` and verify the CLI still works end-to-end against a real issue
-4. Update `README.md` and `CHANGELOG.md` (if present) when behavior changes
+4. Update `README.md` when behavior changes. Adding notes under `## [Unreleased]` in `CHANGELOG.md` is optional but preferred — whatever you write there is what ships in the release notes; leave it empty and the entry is generated from your commit subject instead
 5. Open a PR using the [pull request template](./.github/PULL_REQUEST_TEMPLATE.md) and describe the motivation and trade-offs
 6. Be ready to iterate on review feedback
 
@@ -65,11 +65,11 @@ Set up credentials by running `node dist/cli/index.js init` (writes `~/.config/j
 
 Releases are automated via `.github/workflows/release.yml`, triggered when a `v*.*.*` tag is pushed.
 
-1. Update `CHANGELOG.md` — move entries from `[Unreleased]` into a new dated section, commit on the default branch
-2. Run `pnpm release` — this runs `doryski-release` (from the `@doryski/release` dev dependency), which bumps `package.json`, commits, creates the `vX.Y.Z` tag, and pushes both the branch and the tag to trigger the CI publish workflow
+1. Run `pnpm release` — this runs `doryski-release` (from the `@doryski/release` dev dependency), which cuts a dated `CHANGELOG.md` section, bumps `package.json`, commits both, creates the `vX.Y.Z` tag, and pushes the branch and the tag to trigger the CI publish workflow
+   - The changelog section is promoted from `## [Unreleased]` when it has content, and generated from the conventional commits since the last tag when it does not. `--no-changelog` skips the step
    - Defaults to a patch bump of the latest tag; pass `--release-version 1.2.0` for anything else
    - `--dry-run` previews without changes; `--yes` skips the confirmation prompt
-3. The release workflow then verifies the tag matches `package.json`, builds, runs tests via `prepublishOnly`, publishes to npm with provenance, and creates a GitHub Release with auto-generated notes
+2. The release workflow then verifies the tag matches `package.json`, builds, runs tests via `prepublishOnly`, publishes to npm with provenance, and creates a GitHub Release with auto-generated notes
 
 A repository secret named `NPM_TOKEN` (an npm automation token with publish access) is required for npm publishing to succeed.
 
