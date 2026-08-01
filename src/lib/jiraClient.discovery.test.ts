@@ -490,6 +490,98 @@ describe('JiraClient.detectEpicLinkFieldId', () => {
   });
 });
 
+function captureFailingFetch(
+  status: number,
+  statusText: string,
+  text: string
+): { client: JiraClient; calls: CapturedCall[] } {
+  const calls: CapturedCall[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url, method: init?.method ?? 'GET', headers: {} });
+      return { ok: false, status, statusText, text: async () => text } as unknown as Response;
+    })
+  );
+  return { client: new JiraClient(FAKE_CONFIG, 'token'), calls };
+}
+
+const fieldRequests = (calls: CapturedCall[]) => calls.filter((c) => c.url.endsWith('/field'));
+
+describe('JiraClient.listFields — catalog memoisation', () => {
+  it('issues one /field request on the happy path and none on a second call', async () => {
+    const { client, calls } = captureFetch((url) =>
+      url.endsWith('/field') ? [{ id: 'summary', name: 'Summary' }] : []
+    );
+    const first = await client.listFields();
+    const second = await client.listFields();
+    expect(fieldRequests(calls)).toHaveLength(1);
+    expect(second).toBe(first);
+  });
+
+  it('memoises a 500 failure: the second call adds no request and still rejects', async () => {
+    const { client, calls } = captureFailingFetch(500, 'Internal Server Error', 'kaboom');
+    await expect(client.listFields()).rejects.toThrow(
+      /Jira API request failed: 500 Internal Server Error\nkaboom/
+    );
+    await expect(client.listFields()).rejects.toThrow(
+      /Jira API request failed: 500 Internal Server Error\nkaboom/
+    );
+    expect(fieldRequests(calls)).toHaveLength(1);
+  });
+
+  it('memoises a 403 failure the same way', async () => {
+    const { client, calls } = captureFailingFetch(403, 'Forbidden', 'no field access');
+    await expect(client.listFields()).rejects.toThrow(
+      /Jira API request failed: 403 Forbidden\nno field access/
+    );
+    await expect(client.listFields()).rejects.toThrow(
+      /Jira API request failed: 403 Forbidden\nno field access/
+    );
+    expect(fieldRequests(calls)).toHaveLength(1);
+  });
+
+  it('shares one in-flight request between concurrent callers', async () => {
+    const { client, calls } = captureFetch((url) =>
+      url.endsWith('/field') ? [{ id: 'summary', name: 'Summary' }] : []
+    );
+    await Promise.all([client.listFields(), client.listFields(), client.listFields()]);
+    expect(fieldRequests(calls)).toHaveLength(1);
+  });
+
+  it('makes exactly one /field request across a failing catalog read and all three detectors', async () => {
+    const { client, calls } = captureFailingFetch(500, 'Internal Server Error', 'kaboom');
+    await expect(client.listFields()).rejects.toThrow(/500 Internal Server Error/);
+    await expect(client.detectSprintFieldId()).resolves.toBeUndefined();
+    await expect(client.detectStoryPointsFieldId()).resolves.toBeUndefined();
+    await expect(client.detectEpicLinkFieldId()).resolves.toBeUndefined();
+    expect(fieldRequests(calls)).toHaveLength(1);
+  });
+
+  it('makes exactly one /field request when the three detectors run against a 403 catalog', async () => {
+    const { client, calls } = captureFailingFetch(403, 'Forbidden', 'no field access');
+    await expect(client.detectSprintFieldId()).resolves.toBeUndefined();
+    await expect(client.detectStoryPointsFieldId()).resolves.toBeUndefined();
+    await expect(client.detectEpicLinkFieldId()).resolves.toBeUndefined();
+    expect(fieldRequests(calls)).toHaveLength(1);
+  });
+
+  it('clearFieldCaches lets a client retry after a transient failure', async () => {
+    const { client } = captureFailingFetch(500, 'Internal Server Error', 'kaboom');
+    await expect(client.listFields()).rejects.toThrow(/500 Internal Server Error/);
+
+    client.clearFieldCaches();
+    const { calls } = captureFetch((url) =>
+      url.endsWith('/field')
+        ? [{ id: 'customfield_10020', name: 'Sprint' }]
+        : []
+    );
+    await expect(client.listFields()).resolves.toHaveLength(1);
+    await expect(client.detectSprintFieldId()).resolves.toBe('customfield_10020');
+    expect(fieldRequests(calls)).toHaveLength(1);
+  });
+});
+
 describe('JiraClient.listStatuses', () => {
   it('GETs /status when no project provided', async () => {
     const { client, calls } = captureFetch(() => [{ id: '1', name: 'Open' }]);

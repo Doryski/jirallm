@@ -60,9 +60,13 @@ export const JIRA_ID_TO_BUILT_IN_FIELD: Record<string, BuiltInField> = Object.fr
 
 const BUILT_IN_FIELD_SET = new Set<string>(BUILT_IN_FIELDS);
 
+const CANONICAL_FIELD_BY_LOWERCASE: Record<string, BuiltInField> = {
+  ...JIRA_ID_TO_BUILT_IN_FIELD,
+  ...Object.fromEntries(BUILT_IN_FIELDS.map((name) => [name.toLowerCase(), name])),
+};
+
 export function normalizeFieldName(token: string): string {
-  if (BUILT_IN_FIELD_SET.has(token)) return token;
-  return JIRA_ID_TO_BUILT_IN_FIELD[token.toLowerCase()] ?? token;
+  return CANONICAL_FIELD_BY_LOWERCASE[token.trim().toLowerCase()] ?? token;
 }
 
 export const PRESETS = {
@@ -147,11 +151,13 @@ export function parseFieldsFlag(raw: string): FieldSelector {
       continue;
     }
     if (tok.startsWith('+')) {
-      if (tok.length > 1) include.push(tok.slice(1));
+      const name = tok.slice(1).trim();
+      if (name) include.push(name);
       continue;
     }
     if (tok.startsWith('-')) {
-      if (tok.length > 1) exclude.push(tok.slice(1));
+      const name = tok.slice(1).trim();
+      if (name) exclude.push(name);
       continue;
     }
     // bare name → replacement mode (no preset implied unless above)

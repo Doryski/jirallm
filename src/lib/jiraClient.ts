@@ -662,7 +662,7 @@ const EPIC_LINK_CUSTOM_SCHEMA = 'com.pyxis.greenhopper.jira:gh-epic-link' as con
 export class JiraClient {
   private config: JiraConfig;
   private authHeader: string;
-  private fieldsCache?: JiraFieldMeta[];
+  private fieldsCache?: Promise<JiraFieldMeta[]>;
   private sprintFieldIdCache?: string | null;
   private storyPointsFieldIdCache?: string | null;
   private epicLinkFieldIdCache?: string | null;
@@ -681,11 +681,22 @@ export class JiraClient {
     return requestWithRedirectPolicy(url, init, this.config.redirects);
   }
 
+  /**
+   * Memoises the outcome — success *and* failure — so a single client makes at
+   * most one `GET /field`. A rejected catalog stays rejected: every field
+   * detector and `readFieldCatalog` would otherwise retry the same dead
+   * endpoint. Long-lived SDK clients can retry via {@link clearFieldCaches}.
+   */
   async listFields(): Promise<JiraFieldMeta[]> {
-    if (this.fieldsCache) return this.fieldsCache;
-    const all = await this.makeRequest<JiraFieldMeta[]>('/field');
-    this.fieldsCache = all;
-    return all;
+    this.fieldsCache ??= this.makeRequest<JiraFieldMeta[]>('/field');
+    return this.fieldsCache;
+  }
+
+  clearFieldCaches(): void {
+    this.fieldsCache = undefined;
+    this.sprintFieldIdCache = undefined;
+    this.storyPointsFieldIdCache = undefined;
+    this.epicLinkFieldIdCache = undefined;
   }
 
   async detectSprintFieldId(): Promise<string | undefined> {

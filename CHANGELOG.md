@@ -25,9 +25,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and `storyPoints` already were, so `jirallm search 'project = PROJ' --fields default,+epic` emits
   the epic on every row. Either shape Jira returns is read — an epic object or a bare epic key, with
   the title omitted when Jira supplies none — on both the resolved-id and the fallback path. The
-  catalog read is memoised per client, so a successful read is one shared
-  `GET /rest/api/3/field` across the raw-ID check and the sprint / story-points / epic detection; a
-  catalog read that fails is not memoised and each detection retries it on its own.
+  catalog read is memoised per client, so one invocation makes at most one `GET /rest/api/3/field`
+  across the raw-ID check and the sprint / story-points / epic detection.
 - `ParentRef` is now a public type export (used by `JiraTaskData.parent` and
   `JiraTaskSummary.parent`).
 - Failed Jira requests now throw a `JiraApiError` carrying the response `status`, `body` and
@@ -40,9 +39,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   under a Story under an Epic pulls both. It is the counterpart to `--include-subtasks`, which goes
   the other way and stays metadata-only. The flag has no org-config counterpart; the library
   equivalent is `includeParent` on `ExportOptions`.
+- `JiraClient.clearFieldCaches()` resets the memoised `GET /rest/api/3/field` catalog together with
+  the sprint, story-points and epic-link detector caches (#25). The catalog cache now also holds a
+  failed read, which is right for a CLI invocation but would pin a transient 5xx for the lifetime of
+  a long-lived SDK client; this is the escape hatch that lets the next call re-read it.
 
 ### Changed
 
+- `--fields` now matches field names case-insensitively, on both the add and the drop side (#25).
+  `--fields "+Epic"`, `--fields "+STORYPOINTS"` and `--fields "minimal,-Subtasks"` resolve to the
+  canonical friendly names instead of being rejected, and raw-ID aliases fold the same way
+  (`DueDate` → `dueDate`). Two things stay case-sensitive by design: an unmapped raw Jira field ID
+  is sent to `search` exactly as typed (pass `environment`, not `Environment`), and a configured
+  custom-field key is matched as configured, so `--fields Team` against a configured `team` key is
+  still reported as unknown.
 - `epic.title` is now optional on `JiraTaskData` and `JiraTaskSummary` (#25). Jira hands back a bare
   epic key with no summary on some instances, so the title can legitimately be absent; the exported
   frontmatter prints the key alone rather than `KEY - undefined`, and `--json` omits the `title`
@@ -64,6 +74,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `jirallm search 'project = PROJ' --fields "minimal,-Subtasks"` now genuinely drops `subtasks`
+  (#25). The exclude side was matched case-sensitively, so a capitalised `-Subtasks` left the key in
+  the resolved set and the user got the "`search` cannot project `subtasks`" warning despite having
+  explicitly excluded it. On the include side, `--fields Sprint` is likewise accepted now instead of
+  being rejected as an unknown field.
+- A field-catalog read that fails is now memoised like a successful one (#25). Against a
+  `/rest/api/3/field` that 500s or 403s,
+  `jirallm search 'project = PROJ' --fields "default,+epic,+customfield_10050"` issued four requests
+  to the dead endpoint — the raw-ID check plus the sprint, story-points and epic-link detections,
+  each retrying it independently — and now issues one. The guarantee is now clean: at most one
+  `GET /rest/api/3/field` per invocation, success or failure. Concurrent callers share the in-flight
+  request instead of each starting their own, and the rejection is rethrown unchanged, so error
+  handling is unaffected. Use `JiraClient.clearFieldCaches()` to retry after a transient failure.
 - `search --fields` no longer accepts `epic` and `subtasks` and then silently returns neither (#25).
   Both friendly names map to internal sentinels that are stripped from the wire request, and
   `search` had no step to resolve them the way it already resolved `sprint` and `storyPoints`, so

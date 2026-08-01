@@ -663,11 +663,24 @@ describe('runSearch', () => {
     expect(searchIssuesMock).not.toHaveBeenCalled();
   });
 
-  it('steers a capitalised built-in to its friendly name, not to a raw id (issue #23 follow-up)', async () => {
-    searchIssuesMock.mockResolvedValue({ issues: SAMPLE_ISSUES, isLast: true });
-    const err = await runSearch({ jql: 'x', json: true, fields: 'Sprint' }).catch((e: Error) => e);
-    expect((err as Error).message).toContain('Did you mean "sprint"?');
-    expect((err as Error).message).not.toContain('customfield_10020');
+  it('resolves a capitalised built-in instead of rejecting it (issue #25 follow-up)', async () => {
+    searchIssuesMock.mockResolvedValue({
+      issues: [
+        {
+          key: 'PROJ-1',
+          fields: {
+            summary: 'one',
+            status: { name: 'Open' },
+            customfield_10020: [{ name: 'Sprint 7', state: 'active' }],
+          },
+        },
+      ],
+      isLast: true,
+    });
+    const parsed = await runJsonSearch({ jql: 'x', json: true, fields: 'Sprint' });
+    expect(searchIssuesMock.mock.calls[0][1].fields).toContain('customfield_10020');
+    expect(searchIssuesMock.mock.calls[0][1].fields).not.toContain('__sprint__');
+    expect(parsed.issues[0]).toMatchObject({ key: 'PROJ-1', sprint: 'Sprint 7' });
   });
 
   it('steers a capitalised configured custom-field key to that key (issue #23 follow-up)', async () => {

@@ -918,10 +918,15 @@ Output JSON includes "nextPageToken" — pass it back via --cursor for the next 
 
 --fields shapes the JSON rows, not just the Jira request: it uses the same
 vocabulary as \`fetch\` (presets, +add/-drop, bare list) and raw Jira field IDs
-are normalised too (issuetype → issueType, duedate → dueDate). \`search\` is the
-only command that also passes unmapped raw Jira field IDs straight through
-(customfield_10050, environment); \`fetch\` and \`export\` reject names outside
-their vocabulary. Without it, rows stay
+are normalised too (issuetype → issueType, duedate → dueDate). Those names are
+matched case-insensitively on both the add and the drop side, so --fields
+"+Epic", "+STORYPOINTS" and "minimal,-Subtasks" all resolve. Two things stay
+case-sensitive: an unmapped raw Jira field ID is sent exactly as typed (pass
+"customfield_10050" and "environment", not "Environment"), and a configured
+custom-field key must be spelled as configured (--fields Team against a
+configured \`team\` key is reported as unknown). \`search\` is the only command
+that also passes unmapped raw Jira field IDs straight through; \`fetch\` and
+\`export\` reject names outside their vocabulary. Without it, rows stay
 key/summary/status/assignee/issueType/parent.
 
 A name outside jirallm's vocabulary is checked once against this instance's
@@ -945,10 +950,10 @@ field named "Epic Link"), else the common epic custom field IDs — and added to
 the request, exactly as \`sprint\` and \`storyPoints\` already are. Either shape
 Jira returns is read — an epic object or a bare epic key; the title is omitted
 when Jira supplies none. \`sprint\`, \`storyPoints\` and \`epic\` each need the
-field catalog when no override pins the id; the read is memoised per client, so
-a successful read is fetched once and shared with the catalog check above. If
-the catalog read fails (5xx, 403) nothing is memoised and each detection
-retries it on its own.
+field catalog when no override pins the id; the read is memoised per client —
+its outcome included — so one invocation makes at most one
+GET /rest/api/3/field, shared with the catalog check above, whether that read
+succeeds or fails.
 
 \`subtasks\` is not projectable here. Jira returns no subtasks in a search page,
 so it would cost one extra request per row (up to 50). Naming it explicitly

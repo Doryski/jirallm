@@ -148,7 +148,7 @@ jirallm PROJ-7 --fields all                # explicit preset replaces the config
 jirallm PROJ-7 --fields "key,status"       # bare list replaces the configured base
 ```
 
-Only `+name` / `-name` adjustments compose; a bare comma list or an explicit preset in the flag replaces the config base outright. Valid names are the friendly field names, their raw-ID aliases (`duedate`, `issuelinks`), and any configured custom-field key — anything else is rejected with an error. An unknown name coming from the config block is reported as a warning and skipped, so a stale config never blocks an export.
+Only `+name` / `-name` adjustments compose; a bare comma list or an explicit preset in the flag replaces the config base outright. Valid names are the friendly field names, their raw-ID aliases (`duedate`, `issuelinks`), and any configured custom-field key — anything else is rejected with an error. Friendly names and raw-ID aliases are matched case-insensitively on both the add and the drop side, so `--fields "+Epic"`, `--fields "+STORYPOINTS"` and `--fields "minimal,-Subtasks"` all resolve. Configured custom-field keys are the exception: they are matched exactly as configured, so `--fields Team` against a configured `team` key is still reported as unknown. An unknown name coming from the config block is reported as a warning and skipped, so a stale config never blocks an export.
 
 #### What each command can project
 
@@ -162,7 +162,7 @@ Only `+name` / `-name` adjustments compose; a bare comma list or an explicit pre
 | `storyPoints` | Yes — custom-field ID from the org override, else auto-detected | Yes — same resolution |
 | `parent` | Yes — always requested | Yes — in the default set; drop it with `--fields -parent` |
 
-`sprint`, `storyPoints` and `epic` each need the instance's field catalog when the org config does not pin an ID. The catalog read is memoised per client, so when it succeeds the three detections and `search`'s raw-ID check share a single `GET /rest/api/3/field`. A catalog read that fails (5xx, 403) is not memoised, so each detection retries it independently and the request count grows with the number of fields being detected.
+`sprint`, `storyPoints` and `epic` each need the instance's field catalog when the org config does not pin an ID. The catalog read is memoised per client — its outcome included — so a single invocation makes at most one `GET /rest/api/3/field`, shared by the three detections and `search`'s raw-ID check, whether that read succeeds or fails (5xx, 403). A long-lived `JiraClient` can drop the cached outcome with [`clearFieldCaches()`](#library-usage).
 
 ## Quick start
 
@@ -264,7 +264,7 @@ jirallm search 'assignee = currentUser() AND statusCategory != Done' --org acme 
 jirallm search 'project = PROJ' --org acme --fields default,+labels --json  # --fields shapes the JSON rows too (same vocabulary as `fetch`; `search` alone also accepts unmapped raw Jira field **IDs** such as customfield_10050 or environment — not display names like "Team")
 jirallm search 'project = PROJ' --org acme --fields customfield_10050 --json  # an ID outside jirallm's vocabulary is checked against /rest/api/3/field once and rejected if this instance has no such field (typos fail loudly instead of returning an empty column); run `jirallm fields` for custom-field IDs
 jirallm search 'parent in (PROJ-100, PROJ-200)' --org acme --json  # rows carry `parent` ({key, title, status, issueType, priority} — the last two omitted when Jira has none) by default; drop it with `--fields -parent`
-jirallm search 'project = PROJ' --org acme --fields default,+epic --json  # `epic` works on search: the Epic Link field ID is resolved per instance (org override, else auto-detected, else the common epic IDs), sharing one `GET /rest/api/3/field` with the other detections when the catalog read succeeds
+jirallm search 'project = PROJ' --org acme --fields default,+epic --json  # `epic` works on search: the Epic Link field ID is resolved per instance (org override, else auto-detected, else the common epic IDs), sharing a single `GET /rest/api/3/field` with the other detections
 jirallm search 'project = PROJ' --org acme --fields minimal --json  # `subtasks` is not projectable by search: it is dropped with a warning here, and is an error when named explicitly — use `jirallm fetch <KEY> --with-subtasks`
 jirallm fetch PROJ-123 --json
 jirallm fetch PROJ-123 --fields all --json      # widen the field set (components, labels, custom fields, ...)
@@ -394,6 +394,8 @@ const created = await client.createIssue({
 });
 await client.addComment(created.key, 'Auto-filed from triage script.');
 ```
+
+Each client memoises `GET /rest/api/3/field` and the sprint / story-points / epic-link field IDs derived from it, including a failed read — so a transient 5xx would otherwise stick for the lifetime of a long-lived client. Call `client.clearFieldCaches()` to reset the field catalog together with all three detector caches and let the next call re-read it.
 
 See `examples/` for runnable scripts:
 

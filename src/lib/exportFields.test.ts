@@ -48,6 +48,25 @@ describe('normalizeFieldName', () => {
     expect(normalizeFieldName('totallyUnknown')).toBe('totallyUnknown');
   });
 
+  it('folds any casing of a friendly built-in name to its canonical spelling', () => {
+    expect(normalizeFieldName('Subtasks')).toBe('subtasks');
+    expect(normalizeFieldName('SUBTASKS')).toBe('subtasks');
+    expect(normalizeFieldName('STORYPOINTS')).toBe('storyPoints');
+    expect(normalizeFieldName('Epic')).toBe('epic');
+    expect(normalizeFieldName('ISSUELINKS')).toBe('issueLinks');
+  });
+
+  it('trims surrounding whitespace before resolving a known name', () => {
+    expect(normalizeFieldName(' subtasks ')).toBe('subtasks');
+    expect(normalizeFieldName('\tSprint\n')).toBe('sprint');
+  });
+
+  it('leaves an unknown token byte-for-byte as typed, never case-folded', () => {
+    expect(normalizeFieldName('customfield_ABC')).toBe('customfield_ABC');
+    expect(normalizeFieldName('Environment')).toBe('Environment');
+    expect(normalizeFieldName('MixedCaseUnknown')).toBe('MixedCaseUnknown');
+  });
+
   it('derives the reverse lookup without pseudo IDs or null mappings', () => {
     expect(Object.keys(JIRA_ID_TO_BUILT_IN_FIELD).some((id) => id.startsWith('__'))).toBe(false);
     expect(Object.values(JIRA_ID_TO_BUILT_IN_FIELD)).not.toContain('key');
@@ -135,6 +154,24 @@ describe('parseFieldsFlag', () => {
       preset: 'all',
       include: ['x'],
       exclude: ['y'],
+      mode: 'merge',
+    });
+  });
+
+  it('trims the whitespace left behind by the +/- prefix', () => {
+    expect(parseFieldsFlag('key,+ customfield_10050,-  labels ')).toEqual({
+      preset: undefined,
+      include: ['key', 'customfield_10050'],
+      exclude: ['labels'],
+      mode: 'merge',
+    });
+  });
+
+  it('never yields an empty-string field name from whitespace-only tokens', () => {
+    expect(parseFieldsFlag('key,+ ,-   ')).toEqual({
+      preset: undefined,
+      include: ['key'],
+      exclude: [],
       mode: 'merge',
     });
   });
@@ -350,6 +387,65 @@ describe('resolveFieldSet normalization', () => {
     expect(r.friendlyKeys).not.toContain('issueType');
   });
 
+  it('excludes a built-in whatever the casing of the excluded token (issue #25)', () => {
+    for (const flag of ['minimal,-Subtasks', 'minimal,-SUBTASKS', 'minimal,- subtasks ']) {
+      const r = resolveFieldSet(parseFieldsFlag(flag));
+      expect(r.friendlyKeys).not.toContain('subtasks');
+      expect(new Set(r.friendlyKeys)).toEqual(
+        new Set(PRESETS.minimal.filter((key) => key !== 'subtasks'))
+      );
+    }
+  });
+
+  it('includes a built-in whatever the casing of the included token (issue #25)', () => {
+    const r = resolveFieldSet(parseFieldsFlag('minimal,+Epic,+STORYPOINTS,+ Sprint '));
+    expect(r.friendlyKeys).toContain('epic');
+    expect(r.friendlyKeys).toContain('storyPoints');
+    expect(r.friendlyKeys).toContain('sprint');
+    expect(r.friendlyKeys).not.toContain('Epic');
+    expect(r.friendlyKeys).not.toContain('STORYPOINTS');
+    expect(r.jiraFieldIds.some((id) => id.startsWith('__'))).toBe(false);
+  });
+
+  it('sends a spaced raw field id to Jira without its leading space', () => {
+    const r = resolveFieldSet(parseFieldsFlag('key,+ customfield_10050'), {}, {
+      passThroughUnknown: true,
+    });
+    expect(r.jiraFieldIds).toContain('customfield_10050');
+    expect(r.jiraFieldIds.some((id) => id !== id.trim())).toBe(false);
+    expect(r.jiraFieldIds).not.toContain('');
+  });
+
+  it('never emits an empty-string field id for whitespace-only tokens', () => {
+    const r = resolveFieldSet(parseFieldsFlag('key,+ ,-  ,, '), {}, { passThroughUnknown: true });
+    expect(r.friendlyKeys).not.toContain('');
+    expect(r.jiraFieldIds).not.toContain('');
+  });
+
+  it('maps a mixed-case built-in token to the right Jira field ID (issue #25)', () => {
+    const r = resolveFieldSet(parseFieldsFlag('key,DueDate,IssueLinks,ResolutionDate'));
+    expect(new Set(r.friendlyKeys)).toEqual(
+      new Set(['key', 'dueDate', 'issueLinks', 'resolutionDate'])
+    );
+    expect(r.jiraFieldIds).toContain('duedate');
+    expect(r.jiraFieldIds).toContain('issuelinks');
+    expect(r.jiraFieldIds).toContain('resolutiondate');
+  });
+
+  it('never case-folds an unknown raw Jira ID on the wire (issue #25)', () => {
+    const r = resolveFieldSet(
+      parseFieldsFlag('key,customfield_ABC,Environment'),
+      {},
+      { alwaysFetch: SEARCH_ALWAYS_FETCH, passThroughUnknown: true }
+    );
+    expect(r.friendlyKeys).toContain('customfield_ABC');
+    expect(r.friendlyKeys).toContain('Environment');
+    expect(r.jiraFieldIds).toContain('customfield_ABC');
+    expect(r.jiraFieldIds).toContain('Environment');
+    expect(r.jiraFieldIds).not.toContain('customfield_abc');
+    expect(r.jiraFieldIds).not.toContain('environment');
+  });
+
   it('lets a configured custom field key win over a raw Jira ID alias', () => {
     const defs: CustomFieldDefs = { Created: { id: 'customfield_77777', type: 'scalar' } };
     const r = resolveFieldSet(parseFieldsFlag('default,-Created'), defs);
@@ -512,6 +608,27 @@ describe('findUnknownFieldNames (issue #23)', () => {
 
   it('does not flag raw Jira ID aliases that normalize to built-ins', () => {
     expect(findUnknownFieldNames(parseFieldsFlag('duedate,issuelinks,created'))).toEqual([]);
+  });
+
+  it('does not flag a differently-cased built-in name (issue #25)', () => {
+    expect(findUnknownFieldNames(parseFieldsFlag('default,+Subtasks'))).toEqual([]);
+    expect(findUnknownFieldNames(parseFieldsFlag('default,-SUBTASKS'))).toEqual([]);
+    expect(findUnknownFieldNames(parseFieldsFlag('Key,STORYPOINTS,DueDate'))).toEqual([]);
+  });
+
+  it('reports a spaced unknown token by its trimmed name', () => {
+    expect(findUnknownFieldNames(parseFieldsFlag('key,+ issuelinkz'))).toEqual(['issuelinkz']);
+    expect(findUnknownFieldNames(parseFieldsFlag('default,-  issuelinkz'))).toEqual(['issuelinkz']);
+  });
+
+  it('does not flag a spaced configured custom field key', () => {
+    const defs: CustomFieldDefs = { severity: { id: 'customfield_99999', type: 'select' } };
+    expect(findUnknownFieldNames(parseFieldsFlag('key,+ severity'), defs)).toEqual([]);
+  });
+
+  it('keeps configured custom field keys case-sensitive (issue #23)', () => {
+    const defs: CustomFieldDefs = { team: { id: 'customfield_10050', type: 'select' } };
+    expect(findUnknownFieldNames(parseFieldsFlag('key,Team'), defs)).toEqual(['Team']);
   });
 
   it('does not flag a configured custom field key', () => {
