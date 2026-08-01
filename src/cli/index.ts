@@ -65,18 +65,30 @@ type ExportFlags = {
   fps?: string;
   maxFrames?: string;
   includeSubtasks?: boolean;
+  includeParent?: boolean;
   fields?: string;
   dryRun?: boolean;
   withHistory?: boolean;
   withWorklog?: boolean;
 };
 
+/** Drops repeated issue keys case-insensitively, keeping each key's first spelling and position. */
+export function dedupeIssueKeys(keys: string[]): string[] {
+  const seen = new Set<string>();
+  return keys.filter((key) => {
+    const normalized = key.toLowerCase();
+    if (seen.has(normalized)) return false;
+    seen.add(normalized);
+    return true;
+  });
+}
+
 async function resolveOrgAndKeys(
   rawArgs: string[],
   flags: ExportFlags
 ): Promise<{ org: string; projectKey: string; keys: string[] }> {
   const parsed = parseIssueKeyArgs(rawArgs);
-  const keys = parsed.keys;
+  const keys = dedupeIssueKeys(parsed.keys);
 
   if (flags.org && parsed.org && flags.org !== parsed.org) {
     throw new Error(
@@ -139,6 +151,7 @@ async function runExport(rawArgs: string[], flags: ExportFlags, program: Command
   let apiToken = flags.apiToken;
   let outputDir = flags.outputDir ?? './jira-export';
   let includeSubtasks = flags.includeSubtasks ?? false;
+  const includeParent = flags.includeParent ?? false;
   let videoEnabled = flags.videoFrames;
   let fps = flags.fps ? parseInt(flags.fps, 10) : 5;
   let maxFrames = flags.maxFrames ? parseInt(flags.maxFrames, 10) : 10;
@@ -217,6 +230,7 @@ async function runExport(rawArgs: string[], flags: ExportFlags, program: Command
     console.log(`Base URL:      ${baseUrl}`);
     console.log(`Output dir:    ${outputDir}`);
     console.log(`Include subtasks: ${includeSubtasks}`);
+    console.log(`Include parent:   ${includeParent}`);
     console.log(`With history:  ${flags.withHistory ?? false}`);
     console.log(`With worklog:  ${flags.withWorklog ?? false}`);
     console.log(
@@ -239,11 +253,13 @@ async function runExport(rawArgs: string[], flags: ExportFlags, program: Command
     apiToken!
   );
 
-  console.log(`Exporting ${keys.length} issue(s) to ${outputDir}...`);
+  const parentsSuffix = includeParent ? ' (plus parents)' : '';
+  console.log(`Exporting ${keys.length} issue(s)${parentsSuffix} to ${outputDir}...`);
 
   const result = await exporter.exportIssues(keys, {
     outputDir,
     includeSubtasks,
+    includeParent,
     fieldSelector,
     customFieldDefs,
     videoFrames: { enabled: videoEnabled, fps, maxFrames },
@@ -309,6 +325,10 @@ function addExportOptions(cmd: Command): Command {
     .option('--max-frames <n>', 'Max frames kept per video')
     .option('--include-subtasks', 'Fetch subtask metadata (may already be enabled via org config).')
     .option(
+      '--include-parent',
+      'Also export the parent issue as its own bundle, walking the whole ancestor chain (without this, the parent only appears as a `parent:` frontmatter line).'
+    )
+    .option(
       '--fields <list>',
       'Comma-separated friendly field names to include in frontmatter. Use +name to add a field to the current set and -name to remove one, or "all" | "default" | "minimal". Unrecognised names are an error.'
     )
@@ -338,6 +358,7 @@ Examples:
   $ jirallm PROJ-123 --no-video-frames
   $ jirallm PROJ-123 --fps 2 --max-frames 6
   $ jirallm PROJ-123 --include-subtasks
+  $ jirallm PROJ-123 --include-parent
   $ jirallm export PROJ-123
   $ jirallm fetch PROJ-123 --with-comments --with-history
   $ jirallm fetch PROJ-123 --full

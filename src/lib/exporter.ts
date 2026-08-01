@@ -11,7 +11,7 @@ import {
 export type ExportOptions = {
   outputDir: string;
   includeSubtasks?: boolean;
-  includeParentEpic?: boolean;
+  includeParent?: boolean;
   fieldSelector?: FieldSelector;
   customFieldDefs?: CustomFieldDefs;
   withHistory?: boolean;
@@ -49,6 +49,14 @@ type ExportIssueOutcome = {
   taskMdPath: string;
   attachmentCount: number;
   videos: VideoExtractionInfo[];
+  canonicalKey: string;
+  existed: boolean;
+  parentKey?: string;
+};
+
+type QueueEntry = {
+  key: string;
+  requested: boolean;
 };
 
 const DEFAULT_VIDEO_OPTS = {
@@ -287,6 +295,7 @@ export class JiraExporter {
     }
 
     const taskDir = join(options.outputDir, task.key.toLowerCase());
+    const existed = existsSync(taskDir);
     mkdirSync(taskDir, { recursive: true });
 
     const selectedKeys = new Set(resolved.friendlyKeys);
@@ -372,6 +381,9 @@ export class JiraExporter {
       taskMdPath,
       attachmentCount: task.attachments.length,
       videos,
+      canonicalKey: task.key,
+      existed,
+      parentKey: task.parent?.key,
     };
   }
 
@@ -387,22 +399,34 @@ export class JiraExporter {
       writeFileSync(gitignorePath, '*\n', 'utf-8');
     }
 
-    for (const key of issueKeys) {
+    const seen = new Set<string>();
+    const queue: QueueEntry[] = issueKeys.map((key) => ({ key, requested: true }));
+
+    for (let i = 0; i < queue.length; i++) {
+      const { key, requested } = queue[i];
+      const dedupeKey = key.toLowerCase();
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+
       try {
-        const taskDir = join(options.outputDir, key.toLowerCase());
-        const existed = existsSync(taskDir);
         const outcome = await this.exportIssue(key, options);
-        (existed ? result.updated : result.imported).push({
+        seen.add(outcome.canonicalKey.toLowerCase());
+        (outcome.existed ? result.updated : result.imported).push({
           key,
           path: outcome.taskMdPath,
           attachmentCount: outcome.attachmentCount,
           videos: outcome.videos,
         });
+        if (options.includeParent && outcome.parentKey) {
+          queue.push({ key: outcome.parentKey, requested: false });
+        }
       } catch (error) {
-        result.failed.push({
-          key,
-          error: error instanceof Error ? error.message : String(error),
-        });
+        const message = error instanceof Error ? error.message : String(error);
+        if (!requested) {
+          console.warn(`Failed to fetch parent ${key}: ${message}`);
+          continue;
+        }
+        result.failed.push({ key, error: message });
       }
     }
 

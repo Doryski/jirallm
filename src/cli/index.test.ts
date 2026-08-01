@@ -108,7 +108,7 @@ vi.mock('update-notifier', () => ({
   default: () => ({ notify: vi.fn() }),
 }));
 
-import { buildProgram } from './index.js';
+import { buildProgram, dedupeIssueKeys } from './index.js';
 
 const run = (args: string[]): Promise<Command> =>
   buildProgram().exitOverride().parseAsync(args, { from: 'user' });
@@ -604,6 +604,90 @@ describe('default export command', () => {
     listOrgsMock.mockReturnValue([]);
     await expect(run([])).rejects.toThrow('exit:0');
     expect(runInitMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('export --include-parent / duplicate keys (issue #24)', () => {
+  const mockProfile = () => {
+    listOrgsMock.mockReturnValue(['acme']);
+    resolveOrgInteractiveMock.mockResolvedValue('acme');
+    loadProfileMock.mockResolvedValue({
+      config: { baseUrl: 'https://x', userEmail: 'u@x' },
+      org: {},
+      project: { key: 'PROJ' },
+      apiToken: 'tok',
+    });
+    exportIssuesMock.mockResolvedValue({ imported: [], updated: [], failed: [] });
+  };
+
+  const planLine = (label: string): string => {
+    const line = logs.find((entry) => entry.trim().startsWith(label));
+    if (!line) return '';
+    return line.slice(line.indexOf(label) + label.length).trim();
+  };
+
+  it('dedupes keys case-insensitively, keeping first spelling and position', () => {
+    expect(dedupeIssueKeys(['PROJ-2', 'proj-1', 'PROJ-1', 'PROJ-2'])).toEqual(['PROJ-2', 'proj-1']);
+  });
+
+  it('prints a deduped count and issue list in the dry-run plan', async () => {
+    mockProfile();
+    await run(['PROJ-123', 'proj-123', 'PROJ-124', '--dry-run']);
+    expect(logs.join('\n')).toContain('Issues (2): PROJ-123, PROJ-124');
+  });
+
+  it('passes each duplicated key to exportIssues exactly once', async () => {
+    mockProfile();
+    await run(['PROJ-123', 'proj-123', 'PROJ-124']);
+    expect(firstArg(exportIssuesMock)).toEqual(['PROJ-123', 'PROJ-124']);
+  });
+
+  it('sets includeParent on the exportIssues options when --include-parent is passed', async () => {
+    mockProfile();
+    await run(['PROJ-123', '--include-parent']);
+    expect(argAt(exportIssuesMock, 1)).toMatchObject({ includeParent: true });
+  });
+
+  it('leaves includeParent falsy when the flag is absent', async () => {
+    mockProfile();
+    await run(['PROJ-123']);
+    expect(argAt(exportIssuesMock, 1)).toMatchObject({ includeParent: false });
+  });
+
+  it('reports the flag on the dry-run "Include parent:" line', async () => {
+    mockProfile();
+    await run(['PROJ-123', '--dry-run']);
+    expect(planLine('Include parent:')).toBe('false');
+    logs.length = 0;
+    await run(['PROJ-123', '--include-parent', '--dry-run']);
+    expect(planLine('Include parent:')).toBe('true');
+  });
+
+  it('aligns the "Include parent:" and "Include subtasks:" values in the same column', async () => {
+    mockProfile();
+    await run(['PROJ-123', '--dry-run']);
+    const valueColumn = (label: string): number => {
+      const line = logs.find((entry) => entry.startsWith(label));
+      if (!line) return -1;
+      return line.length - line.slice(label.length).trimStart().length;
+    };
+    const parentColumn = valueColumn('Include parent:');
+    expect(parentColumn).toBeGreaterThan(0);
+    expect(parentColumn).toBe(valueColumn('Include subtasks:'));
+  });
+
+  it('flags the ancestor chain on the "Exporting" line when --include-parent is passed', async () => {
+    mockProfile();
+    await run(['PROJ-123', '--include-parent']);
+    expect(logs.join('\n')).toContain('Exporting 1 issue(s) (plus parents) to ');
+  });
+
+  it('keeps the "Exporting" line unqualified when --include-parent is absent', async () => {
+    mockProfile();
+    await run(['PROJ-123']);
+    const exporting = logs.find((entry) => entry.startsWith('Exporting '));
+    expect(exporting).toContain('Exporting 1 issue(s) to ');
+    expect(exporting).not.toContain('plus parents');
   });
 });
 

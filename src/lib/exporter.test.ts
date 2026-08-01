@@ -498,3 +498,234 @@ describe('JiraExporter.exportIssues', () => {
     expect(result.failed).toEqual([{ key: 'PROJ-1', error: 'plain string failure' }]);
   });
 });
+
+const NO_PARENT_TASK: JiraTaskData = { ...FULL_TASK, parent: undefined };
+
+function taskFor(key: string, parentKey?: string): JiraTaskData {
+  return {
+    ...NO_PARENT_TASK,
+    key,
+    title: key,
+    parent: parentKey ? { key: parentKey, title: `${parentKey} title` } : undefined,
+  };
+}
+
+function makeKeyedExporter(tasks: JiraTaskData[], aliases: Record<string, string> = {}) {
+  const byKey = new Map(tasks.map((t) => [t.key.toLowerCase(), t]));
+  const byAlias = new Map(
+    Object.entries(aliases).map(([from, to]) => [from.toLowerCase(), to.toLowerCase()])
+  );
+  const fetchIssueDetails = vi.fn(async (key: string) => {
+    const lookup = key.toLowerCase();
+    const task = byKey.get(byAlias.get(lookup) ?? lookup);
+    if (!task) throw new Error(`unknown key ${key}`);
+    return task;
+  });
+  return { exporter: makeExporter(NO_PARENT_TASK, { fetchIssueDetails }), fetchIssueDetails };
+}
+
+describe('JiraExporter.exportIssues deduplication', () => {
+  it('fetches a repeated key only once', async () => {
+    const { exporter, fetchIssueDetails } = makeKeyedExporter([taskFor('PROJ-1')]);
+
+    await exporter.exportIssues(['PROJ-1', 'PROJ-1'], { outputDir: tmpDir });
+
+    expect(fetchIssueDetails).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a repeated key in exactly one bucket', async () => {
+    const { exporter } = makeKeyedExporter([taskFor('PROJ-1')]);
+
+    const result = await exporter.exportIssues(['PROJ-1', 'PROJ-1'], { outputDir: tmpDir });
+
+    expect(result.imported.map((i) => i.key)).toEqual(['PROJ-1']);
+    expect(result.updated).toEqual([]);
+    expect(result.failed).toEqual([]);
+  });
+
+  it('dedupes case-insensitively, keeping the first occurrence casing', async () => {
+    const { exporter, fetchIssueDetails } = makeKeyedExporter([taskFor('PROJ-1')]);
+
+    const result = await exporter.exportIssues(['PROJ-1', 'proj-1'], { outputDir: tmpDir });
+
+    expect(fetchIssueDetails).toHaveBeenCalledTimes(1);
+    expect(result.imported.map((i) => i.key)).toEqual(['PROJ-1']);
+  });
+
+  it('preserves input order and first occurrence position', async () => {
+    const { exporter } = makeKeyedExporter([taskFor('PROJ-1'), taskFor('PROJ-2')]);
+
+    const result = await exporter.exportIssues(['PROJ-1', 'PROJ-2', 'PROJ-1'], {
+      outputDir: tmpDir,
+    });
+
+    expect(result.imported.map((i) => i.key)).toEqual(['PROJ-1', 'PROJ-2']);
+  });
+
+  it('does not retry a key that already failed', async () => {
+    const { exporter, fetchIssueDetails } = makeKeyedExporter([taskFor('PROJ-1')]);
+
+    const result = await exporter.exportIssues(['PROJ-BAD', 'PROJ-BAD'], { outputDir: tmpDir });
+
+    expect(fetchIssueDetails).toHaveBeenCalledTimes(1);
+    expect(result.failed).toEqual([{ key: 'PROJ-BAD', error: 'unknown key PROJ-BAD' }]);
+  });
+});
+
+describe('JiraExporter.exportIssues includeParent', () => {
+  it('exports the parent as its own bundle', async () => {
+    const { exporter } = makeKeyedExporter([taskFor('PROJ-1', 'PROJ-100'), taskFor('PROJ-100')]);
+
+    const result = await exporter.exportIssues(['PROJ-1'], {
+      outputDir: tmpDir,
+      includeParent: true,
+    });
+
+    expect(result.imported.map((i) => i.key)).toEqual(['PROJ-1', 'PROJ-100']);
+    expect(existsSync(join(tmpDir, 'proj-100', 'task.md'))).toBe(true);
+  });
+
+  it('walks the whole ancestor chain', async () => {
+    const { exporter } = makeKeyedExporter([
+      taskFor('PROJ-1', 'PROJ-100'),
+      taskFor('PROJ-100', 'PROJ-500'),
+      taskFor('PROJ-500'),
+    ]);
+
+    const result = await exporter.exportIssues(['PROJ-1'], {
+      outputDir: tmpDir,
+      includeParent: true,
+    });
+
+    expect(result.imported.map((i) => i.key)).toEqual(['PROJ-1', 'PROJ-100', 'PROJ-500']);
+    expect(existsSync(join(tmpDir, 'proj-500', 'task.md'))).toBe(true);
+  });
+
+  it('does not export the parent without includeParent', async () => {
+    const { exporter, fetchIssueDetails } = makeKeyedExporter([
+      taskFor('PROJ-1', 'PROJ-100'),
+      taskFor('PROJ-100'),
+    ]);
+
+    const result = await exporter.exportIssues(['PROJ-1'], { outputDir: tmpDir });
+
+    expect(fetchIssueDetails).toHaveBeenCalledTimes(1);
+    expect(result.imported.map((i) => i.key)).toEqual(['PROJ-1']);
+    expect(existsSync(join(tmpDir, 'proj-100'))).toBe(false);
+  });
+
+  it('does not double-export a parent passed explicitly alongside the child', async () => {
+    const { exporter, fetchIssueDetails } = makeKeyedExporter([
+      taskFor('PROJ-1', 'PROJ-100'),
+      taskFor('PROJ-100'),
+    ]);
+
+    const result = await exporter.exportIssues(['PROJ-1', 'PROJ-100'], {
+      outputDir: tmpDir,
+      includeParent: true,
+    });
+
+    expect(fetchIssueDetails).toHaveBeenCalledTimes(2);
+    expect(result.imported.map((i) => i.key)).toEqual(['PROJ-1', 'PROJ-100']);
+  });
+
+  it('terminates on a cyclic parent chain', async () => {
+    const { exporter } = makeKeyedExporter([
+      taskFor('PROJ-1', 'PROJ-1'),
+      taskFor('PROJ-2', 'PROJ-3'),
+      taskFor('PROJ-3', 'PROJ-2'),
+    ]);
+
+    const result = await exporter.exportIssues(['PROJ-1', 'PROJ-2'], {
+      outputDir: tmpDir,
+      includeParent: true,
+    });
+
+    expect(result.imported.map((i) => i.key)).toEqual(['PROJ-1', 'PROJ-2', 'PROJ-3']);
+  });
+
+  it('is a plain single export when the issue has no parent', async () => {
+    const { exporter, fetchIssueDetails } = makeKeyedExporter([taskFor('PROJ-1')]);
+
+    const result = await exporter.exportIssues(['PROJ-1'], {
+      outputDir: tmpDir,
+      includeParent: true,
+    });
+
+    expect(fetchIssueDetails).toHaveBeenCalledTimes(1);
+    expect(result.imported.map((i) => i.key)).toEqual(['PROJ-1']);
+  });
+});
+
+const MOVED_TASKS = [taskFor('NEW-5', 'NEW-1'), taskFor('NEW-1')];
+const MOVED_ALIASES = { 'OLD-5': 'NEW-5', 'OLD-1': 'NEW-1' };
+
+describe('JiraExporter.exportIssues moved keys', () => {
+  it('fetches a moved issue once when its canonical key is also reached via the parent walk', async () => {
+    const { exporter, fetchIssueDetails } = makeKeyedExporter(MOVED_TASKS, MOVED_ALIASES);
+
+    await exporter.exportIssues(['OLD-5', 'OLD-1'], {
+      outputDir: tmpDir,
+      includeParent: true,
+    });
+
+    expect(fetchIssueDetails.mock.calls.map(([key]) => key)).toEqual(['OLD-5', 'OLD-1']);
+  });
+
+  it('reports a moved issue in exactly one bucket', async () => {
+    const { exporter } = makeKeyedExporter(MOVED_TASKS, MOVED_ALIASES);
+
+    const result = await exporter.exportIssues(['OLD-5', 'OLD-1'], {
+      outputDir: tmpDir,
+      includeParent: true,
+    });
+
+    expect(result.imported.map((i) => i.key)).toEqual(['OLD-5', 'OLD-1']);
+    expect(result.updated).toEqual([]);
+    expect(result.failed).toEqual([]);
+  });
+
+  it('reports a re-exported moved key as updated', async () => {
+    const { exporter } = makeKeyedExporter(MOVED_TASKS, MOVED_ALIASES);
+
+    await exporter.exportIssues(['OLD-1'], { outputDir: tmpDir });
+    const result = await exporter.exportIssues(['OLD-1'], { outputDir: tmpDir });
+
+    expect(result.imported).toEqual([]);
+    expect(result.updated.map((i) => i.key)).toEqual(['OLD-1']);
+  });
+});
+
+describe('JiraExporter.exportIssues unreachable ancestors', () => {
+  it('warns instead of failing the run when an ancestor cannot be fetched', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { exporter } = makeKeyedExporter([taskFor('PROJ-1', 'SECRET-9')]);
+
+    const result = await exporter.exportIssues(['PROJ-1'], {
+      outputDir: tmpDir,
+      includeParent: true,
+    });
+
+    expect(result.failed).toEqual([]);
+    expect(result.imported.map((i) => i.key)).toEqual(['PROJ-1']);
+    expect(existsSync(join(tmpDir, 'proj-1', 'task.md'))).toBe(true);
+    expect(warn).toHaveBeenCalledWith(
+      'Failed to fetch parent SECRET-9: unknown key SECRET-9'
+    );
+    warn.mockRestore();
+  });
+
+  it('still fails a requested key while tolerating a failing ancestor', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { exporter } = makeKeyedExporter([taskFor('PROJ-1', 'SECRET-9')]);
+
+    const result = await exporter.exportIssues(['PROJ-1', 'PROJ-BAD'], {
+      outputDir: tmpDir,
+      includeParent: true,
+    });
+
+    expect(result.failed).toEqual([{ key: 'PROJ-BAD', error: 'unknown key PROJ-BAD' }]);
+    expect(result.imported.map((i) => i.key)).toEqual(['PROJ-1']);
+    warn.mockRestore();
+  });
+});

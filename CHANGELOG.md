@@ -23,6 +23,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Failed Jira requests now throw a `JiraApiError` carrying the response `status`, `body` and
   `headers` instead of a flat `Error`, so callers can branch on the status code and read Jira's
   error payload without re-issuing the request.
+- `export --include-parent` pulls a child's parent along as its own full bundle (#24) — its own
+  directory with `task.md`, attachments and frames — instead of only the flattened
+  `parent: "PROJ-100 - <title>"` frontmatter line, so the parent's description, where the
+  requirements usually live, travels with the child. The whole ancestor chain is walked: a sub-task
+  under a Story under an Epic pulls both. It is the counterpart to `--include-subtasks`, which goes
+  the other way and stays metadata-only. The flag has no org-config counterpart; the library
+  equivalent is `includeParent` on `ExportOptions`.
+
+### Removed
+
+- The unused `includeParentEpic` field has been dropped from the public `ExportOptions` type (#24).
+  This is a breaking change to that public type: passing `includeParentEpic` in an object literal —
+  the usual way to call `exportIssues` — is now a compile error, because TypeScript's excess
+  property check rejects it. The field was declared but never read, so nothing it was meant to do is
+  lost and no runtime behaviour changes; the fix is to delete the property from the call.
 
 ### Security
 
@@ -53,6 +68,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   stale config cannot hard-fail an export.
 - `search --json` rows are now shaped from the resolved `--fields` set (#20) instead of a fixed
   projection, so a narrowed or widened selector is reflected in the emitted rows.
+- A key repeated on an `export` command line is now exported once (#24).
+  `jirallm export PROJ-123 PROJ-100 PROJ-100` previously fetched `PROJ-100` twice and reported it in
+  both the "Imported" and the "Updated" summary bucket, printing its download banner twice;
+  attachment bytes were already guarded, but the issue fetch, comments, changelog, subtask fetch,
+  markdown rewrite and video frame extraction all repeated. Keys are now deduplicated
+  case-insensitively, keeping the casing and position of the first occurrence, and each one is
+  reported exactly once. The dedupe happens both in the CLI — so the `--dry-run` listing and the
+  `Exporting N issue(s)` count agree with what is written — and inside `JiraExporter.exportIssues`,
+  so programmatic callers get the same guarantee.
 
 ## [0.12.0] - 2026-07-21
 

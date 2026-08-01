@@ -177,6 +177,9 @@ jirallm PROJ-123 --fps 2 --max-frames 6
 # Include subtask metadata in the export
 jirallm PROJ-123 --include-subtasks
 
+# Also export the parent (and its own parent, up the chain) as full bundles
+jirallm PROJ-123 --include-parent
+
 # Show all options
 jirallm --help
 ```
@@ -209,6 +212,7 @@ const exporter = new JiraExporter(config, apiToken);
 const result = await exporter.exportIssues(['DOCS-123'], {
   outputDir: project.outputDir ?? './jira-export',
   includeSubtasks: org.includeSubtasks ?? false,
+  includeParent: true,
   videoFrames: { enabled: true, fps: 5, maxFrames: 10 },
 });
 ```
