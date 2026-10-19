@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-19
+
 ### Added
 
 - `create`/`edit --fix-versions <name>` and `--affects-versions <name>` write the built-in Fix
@@ -442,6 +444,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   except macOS without Homebrew, where it defaults to no (since setup may
   cascade into a long Homebrew + Xcode CLT install).
 
+[0.14.0]: https://github.com/doryski/jirallm/releases/tag/v0.14.0
 [0.13.1]: https://github.com/doryski/jirallm/releases/tag/v0.13.1
 [0.13.0]: https://github.com/doryski/jirallm/releases/tag/v0.13.0
 [0.12.0]: https://github.com/doryski/jirallm/releases/tag/v0.12.0
