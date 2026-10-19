@@ -87,6 +87,10 @@ export function resolveMediaLayout(opts: AttachOptions): MediaLayoutOptions {
   return { layout: parseImageLayout(opts.imageLayout), width: parseImageWidth(opts.imageWidth) };
 }
 
+export function hasAttachments(opts: AttachOptions): boolean {
+  return [opts.attach, opts.attachImages, opts.attachMedia].some((list) => (list?.length ?? 0) > 0);
+}
+
 async function uploadOrPreview(
   client: JiraClient,
   issueKey: string,
@@ -115,7 +119,7 @@ export async function prepareAttachments(
   const specs = [...(opts.attachImages ?? []), ...(opts.attachMedia ?? [])].map(parseMediaSpec);
   const plainFiles = opts.attach ?? [];
 
-  if (plainFiles.length === 0 && specs.length === 0) {
+  if (!hasAttachments(opts)) {
     return { body: rawBody, attachedNames: [], media: [], layout };
   }
 

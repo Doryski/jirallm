@@ -29,8 +29,10 @@ const detectSprintFieldIdMock = vi.fn();
 const listBoardsMock = vi.fn();
 const listSprintsMock = vi.fn();
 const findBoardByNameMock = vi.fn();
+const getEditFieldsMock = vi.fn();
 vi.mock('../../lib/jiraClient.js', () => ({
   JiraClient: class {
+    getEditFields = getEditFieldsMock;
     uploadAttachment = uploadAttachmentMock;
     getIssueDescriptionAdf = getIssueDescriptionAdfMock;
     updateIssueDescriptionAdf = updateIssueDescriptionAdfMock;
@@ -45,7 +47,8 @@ vi.mock('../../lib/jiraClient.js', () => ({
   },
 }));
 
-import { runEdit } from './edit.js';
+import { loadProfile } from '../../lib/config.js';
+import { hasFieldInput, runEdit } from './edit.js';
 
 let logs: string[];
 let writes: string[];
@@ -88,6 +91,12 @@ beforeEach(async () => {
   });
   findBoardByNameMock.mockReset();
   findBoardByNameMock.mockResolvedValue({ id: 5, name: 'Named', type: 'scrum' });
+  getEditFieldsMock.mockReset();
+  getEditFieldsMock.mockResolvedValue([
+    { fieldId: 'summary', name: 'Summary', required: true },
+    { fieldId: 'fixVersions', name: 'Fix versions', required: false },
+    { fieldId: 'versions', name: 'Affects versions', required: false },
+  ]);
   tmp = await mkdtemp(join(tmpdir(), 'jirallm-edit-'));
 });
 
@@ -172,12 +181,22 @@ describe('runEdit', () => {
 
   it('does NOT call editIssue on --dry-run; emits JSON when requested', async () => {
     Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
-    await runEdit({ issueKey: 'PROJ-1', summary: 'new', dryRun: true, json: true });
+    await runEdit({
+      issueKey: 'PROJ-1',
+      summary: 'new',
+      fixVersions: ['2.0.0'],
+      affectsVersions: ['1.9.0'],
+      dryRun: true,
+      json: true,
+    });
     expect(editIssueMock).not.toHaveBeenCalled();
     const parsed = JSON.parse(writes.join(''));
     expect(parsed.dryRun).toBe(true);
     expect(parsed.issueKey).toBe('PROJ-1');
     expect(parsed.fields.summary).toBe('new');
+    expect(parsed.fields.fixVersions).toEqual(['2.0.0']);
+    expect(parsed.fields.versions).toEqual(['1.9.0']);
+    expect(parsed.fields).not.toHaveProperty('affectsVersions');
   });
 
   it('dry-run --assignee me echoes the resolved display name', async () => {
@@ -241,9 +260,14 @@ describe('runEdit', () => {
     await runEdit({
       issueKey: 'PROJ-1',
       components: ['Web', 'API'],
+      fixVersions: [' 2.0.0 ', '2.1.0'],
+      affectsVersions: ['1.9.0'],
       field: ['reproductionRate=Always'],
     });
     expect(editIssueMock.mock.calls[0][1].components).toEqual(['Web', 'API']);
+    expect(editIssueMock.mock.calls[0][1].fixVersions).toEqual(['2.0.0', '2.1.0']);
+    expect(editIssueMock.mock.calls[0][1].versions).toEqual(['1.9.0']);
+    expect(editIssueMock.mock.calls[0][1]).not.toHaveProperty('affectsVersions');
     expect(editIssueMock.mock.calls[0][1].customFields).toEqual({
       customfield_10051: { value: 'Always' },
     });
@@ -291,8 +315,87 @@ describe('runEdit', () => {
 
   it('keeps a component name containing a comma intact (no splitting)', async () => {
     Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
-    await runEdit({ issueKey: 'PROJ-1', components: ['Foo, Bar & Baz'] });
+    await runEdit({
+      issueKey: 'PROJ-1',
+      components: ['Foo, Bar & Baz'],
+      fixVersions: ['2.0, hotfix'],
+      affectsVersions: ['1.9, beta'],
+    });
     expect(editIssueMock.mock.calls[0][1].components).toEqual(['Foo, Bar & Baz']);
+    expect(editIssueMock.mock.calls[0][1].fixVersions).toEqual(['2.0, hotfix']);
+    expect(editIssueMock.mock.calls[0][1].versions).toEqual(['1.9, beta']);
+  });
+
+  it("clears fix/affects versions with '' (sends empty arrays)", async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runEdit({ issueKey: 'PROJ-1', fixVersions: [''], affectsVersions: [''] });
+    expect(editIssueMock.mock.calls[0][1].fixVersions).toEqual([]);
+    expect(editIssueMock.mock.calls[0][1].versions).toEqual([]);
+  });
+
+  it('de-dupes repeated components and labels keeping first-occurrence order', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runEdit({
+      issueKey: 'PROJ-1',
+      components: ['Web', 'API', ' Web '],
+      labels: 'a,b,a, b',
+      fixVersions: ['2.0.0', '2.0.0'],
+    });
+    expect(editIssueMock.mock.calls[0][1].components).toEqual(['Web', 'API']);
+    expect(editIssueMock.mock.calls[0][1].labels).toEqual(['a', 'b']);
+    expect(editIssueMock.mock.calls[0][1].fixVersions).toEqual(['2.0.0']);
+  });
+
+  it('throws a usage error before loading the profile when nothing to edit is given', async () => {
+    const loadProfileMock = vi.mocked(loadProfile);
+    loadProfileMock.mockClear();
+    await expect(runEdit({ issueKey: 'PROJ-1', noWiki: true, board: 'Named' })).rejects.toThrow(
+      /Nothing to edit.*--fix-versions.*--attach\/--attach-images/
+    );
+    expect(loadProfileMock).not.toHaveBeenCalled();
+    expect(uploadAttachmentMock).not.toHaveBeenCalled();
+    expect(editIssueMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects a malformed --field before uploading any attachment', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await expect(
+      runEdit({ issueKey: 'PROJ-1', field: ['notAField=1'], attach: ['/tmp/report.txt'] })
+    ).rejects.toThrow();
+    expect(uploadAttachmentMock).not.toHaveBeenCalled();
+    expect(editIssueMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects an invalid --image-layout before uploading any attachment', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await expect(
+      runEdit({ issueKey: 'PROJ-1', summary: 'x', attach: ['/tmp/a.txt'], imageLayout: 'sideways' })
+    ).rejects.toThrow();
+    expect(uploadAttachmentMock).not.toHaveBeenCalled();
+  });
+
+  it('attach-only edit uploads once, skips editIssue and reports updated:false (JSON)', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await runEdit({ issueKey: 'PROJ-1', attach: ['/tmp/report.txt'], noWiki: true, json: true });
+    expect(uploadAttachmentMock).toHaveBeenCalledTimes(1);
+    expect(editIssueMock).not.toHaveBeenCalled();
+    expect(updateIssueDescriptionAdfMock).not.toHaveBeenCalled();
+    expect(JSON.parse(writes.join(''))).toEqual({
+      issueKey: 'PROJ-1',
+      updated: false,
+      attachments: ['report.txt'],
+    });
+    warn.mockRestore();
+  });
+
+  it('attach-only edit prints a human confirmation', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await runEdit({ issueKey: 'PROJ-1', attach: ['/tmp/a.txt', '/tmp/b.txt'] });
+    expect(editIssueMock).not.toHaveBeenCalled();
+    expect(logs).toContain('✓ Attached 2 file(s) to PROJ-1');
+    warn.mockRestore();
   });
 
   it('--attach-images appends embeds to the new description and rewrites its ADF', async () => {
@@ -341,5 +444,99 @@ describe('runEdit', () => {
     await runEdit({ issueKey: 'PROJ-1', description: 'plain' });
     expect(uploadAttachmentMock).not.toHaveBeenCalled();
     expect(updateIssueDescriptionAdfMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('runEdit — version fields vs the edit screen', () => {
+  const screenWith = (...fields: Array<{ fieldId: string; allowedValues?: string[] }>) =>
+    getEditFieldsMock.mockResolvedValue(fields.map((f) => ({ name: f.fieldId, required: false, ...f })));
+
+  it('does not read editmeta when no version flag is given', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runEdit({ issueKey: 'PROJ-1', summary: 'x' });
+    expect(getEditFieldsMock).not.toHaveBeenCalled();
+  });
+
+  it('writes when every name is an allowed value', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    screenWith({ fieldId: 'fixVersions', allowedValues: ['W43/26', 'W44/26'] });
+    await runEdit({ issueKey: 'PROJ-1', fixVersions: ['W44/26'] });
+    expect(getEditFieldsMock).toHaveBeenCalledWith('PROJ-1');
+    expect(editIssueMock.mock.calls[0][1].fixVersions).toEqual(['W44/26']);
+  });
+
+  it('aborts before upload and write when the field is off the edit screen', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    screenWith({ fieldId: 'summary' });
+    await expect(
+      runEdit({ issueKey: 'PROJ-1', fixVersions: ['W44/26'], attach: ['/tmp/a.txt'] })
+    ).rejects.toThrow(/Fix versions isn't on the edit screen of PROJ-1, so Jira would reject --fix-versions/);
+    expect(uploadAttachmentMock).not.toHaveBeenCalled();
+    expect(editIssueMock).not.toHaveBeenCalled();
+  });
+
+  it('checks the screen for a clear too', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    screenWith({ fieldId: 'fixVersions', allowedValues: [] });
+    await expect(runEdit({ issueKey: 'PROJ-1', affectsVersions: [''] })).rejects.toThrow(
+      /Affects versions isn't on the edit screen/
+    );
+  });
+
+  it('rejects an unknown name with the valid ones and a case hint', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    screenWith({ fieldId: 'fixVersions', allowedValues: ['W43/26'] });
+    const err = await runEdit({ issueKey: 'PROJ-1', fixVersions: ['w43/26'] }).catch((e: Error) => e);
+    expect((err as Error).message).toContain('did you mean "W43/26"?');
+    expect((err as Error).message).toContain('Valid fix versions for PROJ-1: W43/26.');
+    expect((err as Error).message).toContain('jirallm versions -P PROJ');
+    expect(editIssueMock).not.toHaveBeenCalled();
+  });
+
+  it('does not read editmeta on --dry-run (no Jira call, as documented)', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    screenWith({ fieldId: 'summary' });
+    await runEdit({ issueKey: 'PROJ-1', fixVersions: ['1.0'], dryRun: true, json: true });
+    expect(getEditFieldsMock).not.toHaveBeenCalled();
+  });
+
+  it('warns and proceeds when editmeta cannot be read', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    getEditFieldsMock.mockRejectedValue(new Error('Jira API request failed: 403 Forbidden'));
+    await runEdit({ issueKey: 'PROJ-1', fixVersions: ['1.0'] });
+    expect(warn.mock.calls[0][0]).toMatch(/could not read the edit screen of PROJ-1 .*403.*--fix-versions/);
+    expect(editIssueMock).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+});
+
+describe('hasFieldInput', () => {
+  it('ignores non-field options', () => {
+    expect(
+      hasFieldInput({
+        issueKey: 'PROJ-1',
+        noWiki: true,
+        board: 'B',
+        dryRun: true,
+        json: true,
+        attach: ['a'],
+        imageLayout: 'center',
+        unassign: false,
+        field: [],
+      })
+    ).toBe(false);
+  });
+
+  it.each([
+    { summary: '' },
+    { description: '' },
+    { fixVersions: [''] },
+    { affectsVersions: ['1.0'] },
+    { sprint: 'none' },
+    { unassign: true },
+    { field: ['x=1'] },
+  ])('counts %o as field input', (extra) => {
+    expect(hasFieldInput({ issueKey: 'PROJ-1', ...extra })).toBe(true);
   });
 });

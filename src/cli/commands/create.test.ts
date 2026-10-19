@@ -79,6 +79,8 @@ beforeEach(async () => {
   getCreateFieldsMock.mockResolvedValue([
     { fieldId: 'customfield_10050', name: 'Severity', required: false },
     { fieldId: 'customfield_10020', name: 'Sprint', required: false },
+    { fieldId: 'fixVersions', name: 'Fix versions', required: false },
+    { fieldId: 'versions', name: 'Affects versions', required: false },
   ]);
   detectSprintFieldIdMock.mockReset();
   detectSprintFieldIdMock.mockResolvedValue('customfield_10020');
@@ -186,8 +188,28 @@ describe('runCreate', () => {
 
   it('passes repeatable --components through as a trimmed array', async () => {
     Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
-    await runCreate({ org: 'acme', type: 'Bug', summary: 's', components: ['Web', ' API '] });
-    expect(createIssueMock.mock.calls[0][0].components).toEqual(['Web', 'API']);
+    await runCreate({
+      org: 'acme',
+      type: 'Bug',
+      summary: 's',
+      components: ['Web', ' API ', 'Web'],
+      labels: 'a, b,a',
+      fixVersions: [' 2.0.0 ', '2.1.0', '2.0.0'],
+      affectsVersions: ['1.9, beta', ''],
+    });
+    const input = createIssueMock.mock.calls[0][0];
+    expect(input.components).toEqual(['Web', 'API']);
+    expect(input.labels).toEqual(['a', 'b']);
+    expect(input.fixVersions).toEqual(['2.0.0', '2.1.0']);
+    expect(input.versions).toEqual(['1.9, beta']);
+    expect(input).not.toHaveProperty('affectsVersions');
+  });
+
+  it('leaves fixVersions/versions undefined when the flags are not given', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runCreate({ org: 'acme', type: 'Bug', summary: 's' });
+    expect(createIssueMock.mock.calls[0][0].fixVersions).toBeUndefined();
+    expect(createIssueMock.mock.calls[0][0].versions).toBeUndefined();
   });
 
   it('keeps a component name containing a comma intact (no splitting)', async () => {
@@ -240,6 +262,8 @@ describe('runCreate', () => {
       type: 'Bug',
       summary: 's',
       components: ['Web'],
+      fixVersions: ['2.0.0'],
+      affectsVersions: ['1.9.0'],
       field: ['severity=High'],
       dryRun: true,
       json: true,
@@ -247,6 +271,8 @@ describe('runCreate', () => {
     expect(createIssueMock).not.toHaveBeenCalled();
     const parsed = JSON.parse(writes.join(''));
     expect(parsed.input.components).toEqual(['Web']);
+    expect(parsed.input.fixVersions).toEqual(['2.0.0']);
+    expect(parsed.input.versions).toEqual(['1.9.0']);
     expect(parsed.input.customFields).toEqual({ customfield_10050: { value: 'High' } });
   });
 
@@ -401,6 +427,40 @@ describe('runCreate', () => {
     });
     expect(getCreateFieldsMock).not.toHaveBeenCalled();
     expect(createIssueMock).not.toHaveBeenCalled();
+  });
+
+  it('aborts before createIssue when a version field is off the create screen', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    getCreateFieldsMock.mockResolvedValue([{ fieldId: 'summary', name: 'Summary', required: true }]);
+    await expect(
+      runCreate({ org: 'acme', type: 'Story', summary: 's', fixVersions: ['W44/26'] })
+    ).rejects.toThrow(/Fix versions isn't on the "Story" create screen in PROJ, so Jira would reject --fix-versions/);
+    expect(createIssueMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unknown version name on create, listing the valid ones', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    getCreateFieldsMock.mockResolvedValue([
+      { fieldId: 'fixVersions', name: 'Fix versions', required: false, allowedValues: ['W43/26'] },
+    ]);
+    await expect(
+      runCreate({ org: 'acme', type: 'Bug', summary: 's', fixVersions: ['9.9.9'] })
+    ).rejects.toThrow(/Unknown fix version "9.9.9" in PROJ[\s\S]*Valid fix versions in PROJ: W43\/26\./);
+    expect(createIssueMock).not.toHaveBeenCalled();
+  });
+
+  it('fetches the create screen once when both --field and a version flag are checked', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runCreate({ org: 'acme', type: 'Bug', summary: 's', field: ['severity=High'], fixVersions: ['1.0'] });
+    expect(getCreateFieldsMock).toHaveBeenCalledTimes(1);
+    expect(createIssueMock).toHaveBeenCalled();
+  });
+
+  it('skips the version check for an empty list and on --dry-run', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    await runCreate({ org: 'acme', type: 'Task', summary: 's', fixVersions: [''] });
+    await runCreate({ org: 'acme', type: 'Task', summary: 's', fixVersions: ['1.0'], dryRun: true, json: true });
+    expect(getCreateFieldsMock).not.toHaveBeenCalled();
   });
 
   it('warns and proceeds when the create screen cannot be fetched', async () => {

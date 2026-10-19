@@ -1,4 +1,4 @@
-import { CUSTOM_FIELD_TYPES } from './exportFields.js';
+import { CUSTOM_FIELD_TYPES, lookupOwn, systemFieldWriteHint } from './exportFields.js';
 import type { CustomFieldDefs, CustomFieldType } from './exportFields.js';
 
 /**
@@ -52,7 +52,8 @@ function isClearValue(value: string): boolean {
  * Key resolution:
  *  1. Friendly name configured in customFieldDefs → use its {id, type}.
  *  2. Raw `customfield_NNNNN[:type]` → inline type, or default to `scalar`.
- *  3. Anything else → error listing configured friendly names.
+ *  3. A system field name (case-insensitive, `:type` stripped) → error pointing to the dedicated flag or command.
+ *  4. Anything else → error listing configured friendly names.
  * A `key=` (empty) or `key=null` value shapes to `null`, clearing the field regardless of type.
  */
 export function parseFieldFlag(token: string, customFieldDefs: CustomFieldDefs = {}): ParsedField {
@@ -64,7 +65,7 @@ export function parseFieldFlag(token: string, customFieldDefs: CustomFieldDefs =
   const value = token.slice(eq + 1);
   const clear = isClearValue(value);
 
-  const def = customFieldDefs[key];
+  const def = lookupOwn(customFieldDefs, key);
   if (def) {
     return { jiraId: def.id, shaped: clear ? null : formatCustomFieldWrite(def.type, value) };
   }
@@ -78,6 +79,11 @@ export function parseFieldFlag(token: string, customFieldDefs: CustomFieldDefs =
       );
     }
     return { jiraId: rawId, shaped: clear ? null : formatCustomFieldWrite(type, value) };
+  }
+
+  const remedy = systemFieldWriteHint(rawId);
+  if (remedy) {
+    throw new Error(`"${rawId}" is a system field, not a custom field; ${remedy}.`);
   }
 
   const known = Object.keys(customFieldDefs);

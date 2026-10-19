@@ -1,10 +1,13 @@
 import { readFile } from 'node:fs/promises';
 import { loadOrgProfile, resolveOptionalProjectKey } from '../../lib/config.js';
 import { JiraClient } from '../../lib/jiraClient.js';
+import type { JiraCreateField } from '../../lib/jiraClient.js';
 import { findFieldsOffCreateScreen, parseFieldFlags } from '../../lib/customFieldWrite.js';
 import { withResolvedSprint } from '../../lib/sprintWrite.js';
 import type { CustomFieldDefs } from '../../lib/exportFields.js';
 import { resolveAccountId } from '../resolveUser.js';
+import { normalizeNameList } from '../nameList.js';
+import { assertVersionsSettable, nonEmptyOrUndefined } from '../versionScreen.js';
 import { printJson, shouldOutputJson } from '../jsonOutput.js';
 import {
   embedDescriptionImages,
@@ -26,6 +29,8 @@ export type CreateOptions = {
   priority?: string;
   parent?: string;
   components?: string[];
+  fixVersions?: string[];
+  affectsVersions?: string[];
   field?: string[];
   sprint?: string;
   board?: string;
@@ -38,6 +43,11 @@ export type CreateOptions = {
   json?: boolean;
 };
 
+function once<T>(load: () => Promise<T>): () => Promise<T> {
+  let pending: Promise<T> | undefined;
+  return () => (pending ??= load());
+}
+
 export async function runCreate(opts: CreateOptions): Promise<void> {
   const profile = await loadOrgProfile({ org: opts.org });
   resolveMediaLayout(opts);
@@ -49,8 +59,8 @@ export async function runCreate(opts: CreateOptions): Promise<void> {
     descriptionMarkdown = opts.description;
   }
 
-  const labels = opts.labels?.split(',').map((s) => s.trim()).filter(Boolean);
-  const components = opts.components?.map((s) => s.trim()).filter(Boolean);
+  const labels = normalizeNameList(opts.labels?.split(','));
+  const components = normalizeNameList(opts.components);
   const customFieldDefs = profile.org?.export?.customFieldDefs;
   const parsedFields = parseFieldFlags(opts.field, customFieldDefs);
 
@@ -89,8 +99,11 @@ export async function runCreate(opts: CreateOptions): Promise<void> {
     priority: opts.priority,
     parentKey: opts.parent,
     components,
+    fixVersions: normalizeNameList(opts.fixVersions),
+    versions: normalizeNameList(opts.affectsVersions),
     customFields,
   };
+
 
   if (opts.dryRun) {
     const dryRunAttachments = await prepareAttachments(
@@ -116,9 +129,20 @@ export async function runCreate(opts: CreateOptions): Promise<void> {
     return;
   }
 
+  const loadCreateScreen = once(() => client.getCreateFields(projectKey, opts.type));
+  await assertVersionsSettable(
+    { fixVersions: nonEmptyOrUndefined(input.fixVersions), versions: nonEmptyOrUndefined(input.versions) },
+    {
+      load: loadCreateScreen,
+      context: { screen: `"${opts.type}" create screen in ${projectKey}`, target: `in ${projectKey}` },
+      remedy:
+        `List the project's versions with \`jirallm versions -P ${projectKey}\`. ` +
+        'A field missing from the create screen can be set after creating with `jirallm edit` if it is on the edit screen, or added to the create screen by a Jira admin.',
+    }
+  );
   if (customFields) {
     await assertCustomFieldsOnCreateScreen(
-      client,
+      loadCreateScreen,
       projectKey,
       opts.type,
       customFields,
@@ -158,7 +182,7 @@ export async function runCreate(opts: CreateOptions): Promise<void> {
  * (e.g. permissions), warn and proceed rather than block a flow that may work.
  */
 async function assertCustomFieldsOnCreateScreen(
-  client: JiraClient,
+  loadCreateScreen: () => Promise<JiraCreateField[]>,
   projectKey: string,
   issueType: string,
   customFields: Record<string, unknown>,
@@ -166,7 +190,7 @@ async function assertCustomFieldsOnCreateScreen(
 ): Promise<void> {
   let createFields;
   try {
-    createFields = await client.getCreateFields(projectKey, issueType);
+    createFields = await loadCreateScreen();
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     console.warn(

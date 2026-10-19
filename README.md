@@ -267,6 +267,7 @@ jirallm projects --org acme --json
 jirallm boards --org acme --project PROJ --json
 jirallm sprints 123 --org acme --state active --json
 jirallm issuetypes --org acme --project PROJ --json
+jirallm versions --org acme --project PROJ --json   # valid names for --fix-versions / --affects-versions
 jirallm linktypes --org acme --json
 jirallm search 'assignee = currentUser() AND statusCategory != Done' --org acme --limit 25 --json
 jirallm search 'project = PROJ' --org acme --fields default,+labels --json  # --fields shapes the JSON rows too (same vocabulary as `fetch`; `search` alone also accepts unmapped raw Jira field **IDs** such as customfield_10050 or environment — not display names like "Team")
@@ -299,6 +300,8 @@ jirallm transition PROJ-123 --to "In Review"
 jirallm worklog -f ./worklogs.json
 jirallm create --org acme --project PROJ --type Task --summary "Spike" --description-file ./spike.md
 jirallm edit PROJ-123 --summary "New title" --labels a,b --priority High --parent PROJ-1 --due 2026-08-01
+jirallm edit PROJ-123 --fix-versions 2.4.0 --affects-versions 2.3.1   # repeatable; replaces the existing set
+jirallm edit PROJ-123 --fix-versions ''      # clear Fix versions
 jirallm edit PROJ-123 --sprint 42            # add to a sprint by id
 jirallm edit PROJ-123 --sprint active        # add to the board's active sprint (--board <name> if several)
 jirallm edit PROJ-123 --sprint none          # remove from its sprint

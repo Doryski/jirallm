@@ -65,8 +65,49 @@ const CANONICAL_FIELD_BY_LOWERCASE: Record<string, BuiltInField> = {
   ...Object.fromEntries(BUILT_IN_FIELDS.map((name) => [name.toLowerCase(), name])),
 };
 
+export function lookupOwn<T>(table: Record<string, T>, key: string): T | undefined {
+  return Object.hasOwn(table, key) ? table[key] : undefined;
+}
+
 export function normalizeFieldName(token: string): string {
-  return CANONICAL_FIELD_BY_LOWERCASE[token.trim().toLowerCase()] ?? token;
+  return lookupOwn(CANONICAL_FIELD_BY_LOWERCASE, token.trim().toLowerCase()) ?? token;
+}
+
+export const SYSTEM_FIELD_WRITE_HINTS = {
+  summary: 'use --summary',
+  description: 'use --description or --description-file',
+  assignee: 'use --assignee (or --unassign on edit)',
+  labels: 'use --labels',
+  priority: 'use --priority',
+  parent: 'use --parent',
+  components: 'use --components',
+  fixVersions: 'use --fix-versions',
+  fixVersion: 'use --fix-versions',
+  versions: 'use --affects-versions',
+  affectsVersions: 'use --affects-versions',
+  affectedVersion: 'use --affects-versions',
+  dueDate: 'use --due (edit only)',
+  sprint: 'use --sprint',
+  status: 'change it with `jirallm transition <key> --to <status>`',
+  resolution: 'set it through a transition (`jirallm transition`)',
+  issueType: 'set it with -t/--type on create',
+  issueLinks: 'use `jirallm link`',
+  reporter: 'it cannot be set via --field',
+  creator: 'it cannot be set via --field',
+  createdAt: 'it cannot be set via --field',
+  updatedAt: 'it cannot be set via --field',
+  resolutionDate: 'it cannot be set via --field',
+  key: 'it cannot be set via --field',
+  subtasks: 'it cannot be set via --field',
+  timetracking: 'it cannot be set via --field',
+} as const;
+
+const SYSTEM_FIELD_WRITE_HINT_BY_LOWERCASE: Record<string, string> = Object.fromEntries(
+  Object.entries(SYSTEM_FIELD_WRITE_HINTS).map(([name, hint]) => [name.toLowerCase(), hint])
+);
+
+export function systemFieldWriteHint(key: string): string | undefined {
+  return lookupOwn(SYSTEM_FIELD_WRITE_HINT_BY_LOWERCASE, normalizeFieldName(key).toLowerCase());
 }
 
 export const PRESETS = {
@@ -229,12 +270,12 @@ export function resolveFieldSet(
 
   const jiraIds = new Set<string>(alwaysFetch);
   for (const key of friendlyKeys) {
-    if (key in BUILT_IN_FIELD_TO_JIRA_ID) {
+    if (Object.hasOwn(BUILT_IN_FIELD_TO_JIRA_ID, key)) {
       const id = BUILT_IN_FIELD_TO_JIRA_ID[key as BuiltInField];
       if (id && !id.startsWith('__')) jiraIds.add(id);
       continue;
     }
-    const def = customFieldDefs[key];
+    const def = lookupOwn(customFieldDefs, key);
     if (def) {
       jiraIds.add(def.id);
       continue;

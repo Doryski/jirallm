@@ -24,6 +24,7 @@ export type {
   JiraWatcher,
   JiraIssueLink,
   JiraComponent,
+  JiraVersion,
   JiraCreateField,
   JiraSearchPage,
   JiraPage,

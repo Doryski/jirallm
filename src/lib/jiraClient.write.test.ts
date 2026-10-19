@@ -146,6 +146,42 @@ describe('JiraClient.createIssue', () => {
     expect(body.fields.customfield_10050).toEqual({ value: 'High' });
   });
 
+  it('maps fixVersions and versions to [{ name }]', async () => {
+    const { client, calls } = captureFetch(() => ({
+      json: { id: '1', key: 'PROJ-1', self: 'x' },
+    }));
+    await client.createIssue({
+      projectKey: 'PROJ',
+      issueType: 'Bug',
+      summary: 's',
+      fixVersions: ['2.0.0', '2.1.0'],
+      versions: ['1.9.0'],
+    });
+    const body = calls[0].body as { fields: Record<string, unknown> };
+    expect(body.fields.fixVersions).toEqual([{ name: '2.0.0' }, { name: '2.1.0' }]);
+    expect(body.fields.versions).toEqual([{ name: '1.9.0' }]);
+  });
+
+  it('omits empty name lists on create (nothing to clear on a new issue)', async () => {
+    const { client, calls } = captureFetch(() => ({
+      json: { id: '1', key: 'PROJ-1', self: 'x' },
+    }));
+    await client.createIssue({
+      projectKey: 'PROJ',
+      issueType: 'Bug',
+      summary: 's',
+      components: [],
+      fixVersions: [],
+      versions: [],
+    });
+    const body = calls[0].body as { fields: Record<string, unknown> };
+    expect(body.fields).toEqual({
+      project: { key: 'PROJ' },
+      issuetype: { name: 'Bug' },
+      summary: 's',
+    });
+  });
+
   it('throws a descriptive error when Jira returns non-OK', async () => {
     const { client } = captureFetch(() => ({
       ok: false,
@@ -222,9 +258,32 @@ describe('JiraClient.editIssue', () => {
     expect(body.fields.duedate).toBe('2026-08-01');
   });
 
+  it('maps fixVersions and versions on edit', async () => {
+    const { client, calls } = captureFetch(() => ({ status: 204 }));
+    await client.editIssue('PROJ-1', { fixVersions: ['2.0.0'], versions: ['1.9.0'] });
+    const body = calls[0].body as { fields: Record<string, unknown> };
+    expect(body.fields).toEqual({
+      fixVersions: [{ name: '2.0.0' }],
+      versions: [{ name: '1.9.0' }],
+    });
+  });
+
+  it('sends an empty fixVersions array to clear the set', async () => {
+    const { client, calls } = captureFetch(() => ({ status: 204 }));
+    await client.editIssue('PROJ-1', { fixVersions: [] });
+    const body = calls[0].body as { fields: Record<string, unknown> };
+    expect(body.fields).toEqual({ fixVersions: [] });
+  });
+
   it('treats customFields/components as updatable fields (not "no fields")', async () => {
     const { client, calls } = captureFetch(() => ({ status: 204 }));
     await client.editIssue('PROJ-1', { customFields: { customfield_10051: 1 } });
+    expect(calls[0].method).toBe('PUT');
+  });
+
+  it('treats fixVersions/versions alone as updatable fields', async () => {
+    const { client, calls } = captureFetch(() => ({ status: 204 }));
+    await client.editIssue('PROJ-1', { versions: ['1.0'] });
     expect(calls[0].method).toBe('PUT');
   });
 
@@ -242,6 +301,41 @@ describe('JiraClient.listComponents', () => {
     const result = await client.listComponents('PROJ');
     expect(calls[0].url).toContain('/rest/api/3/project/PROJ/components');
     expect(result).toEqual([{ id: '1', name: 'Web' }]);
+  });
+});
+
+describe('JiraClient.getEditFields', () => {
+  it('GETs editmeta and flattens it into the create-field shape', async () => {
+    const { client, calls } = captureFetch(() => ({
+      json: {
+        fields: {
+          summary: { name: 'Summary', required: true, schema: { type: 'string' } },
+          fixVersions: {
+            name: 'Fix versions',
+            required: false,
+            schema: { type: 'array' },
+            allowedValues: [{ id: '1', name: 'W43/26' }, { id: '2', name: 'W44/26' }],
+          },
+        },
+      },
+    }));
+    const result = await client.getEditFields('CN-1');
+    expect(calls[0].url).toContain('/rest/api/3/issue/CN-1/editmeta');
+    expect(result).toEqual([
+      { fieldId: 'summary', name: 'Summary', required: true, schemaType: 'string', allowedValues: undefined },
+      { fieldId: 'fixVersions', name: 'Fix versions', required: false, schemaType: 'array', allowedValues: ['W43/26', 'W44/26'] },
+    ]);
+  });
+});
+
+describe('JiraClient.listVersions', () => {
+  it('GETs /project/{key}/versions', async () => {
+    const { client, calls } = captureFetch(() => ({
+      json: [{ id: '10', name: '2.0.0', released: false, archived: false }],
+    }));
+    const result = await client.listVersions('PROJ');
+    expect(calls[0].url).toContain('/rest/api/3/project/PROJ/versions');
+    expect(result).toEqual([{ id: '10', name: '2.0.0', released: false, archived: false }]);
   });
 });
 

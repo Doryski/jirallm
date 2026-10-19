@@ -90,6 +90,36 @@ describe('parseFieldFlag', () => {
     expect(() => parseFieldFlag('unknown=x', DEFS)).toThrow(/severity/);
   });
 
+  it('points fixVersions at --fix-versions, with or without an inline type', () => {
+    expect(() => parseFieldFlag('fixVersions=1.0', {})).toThrow(/system field.*--fix-versions/);
+    expect(() => parseFieldFlag('FixVersions:array=1.0', {})).toThrow(
+      /system field.*--fix-versions/
+    );
+  });
+
+  it('points versions at --affects-versions', () => {
+    expect(() => parseFieldFlag('versions=1.0', {})).toThrow(/--affects-versions/);
+  });
+
+  it('points status at transition', () => {
+    expect(() => parseFieldFlag('status=Done', {})).toThrow(/transition/);
+  });
+
+  it('lets a configured friendly name win over a system field name', () => {
+    const defs: CustomFieldDefs = { sprint: { id: 'customfield_10020', type: 'sprint' } };
+    expect(parseFieldFlag('sprint=42', defs)).toEqual({ jiraId: 'customfield_10020', shaped: 42 });
+  });
+
+  it('keeps the unknown-custom-field error for non-system names', () => {
+    expect(() => parseFieldFlag('foo=1', {})).toThrow(/Unknown custom field/);
+  });
+
+  it('treats Object.prototype keys as unknown fields, not configured ones', () => {
+    for (const key of ['constructor', 'Constructor', '__proto__', 'toString']) {
+      expect(() => parseFieldFlag(`${key}=1`, {})).toThrow(/Unknown custom field/);
+    }
+  });
+
   it('throws on an invalid inline type', () => {
     expect(() => parseFieldFlag('customfield_10099:bogus=x', {})).toThrow(/type/);
   });

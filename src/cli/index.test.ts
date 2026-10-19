@@ -23,6 +23,7 @@ const runBoardsMock = vi.fn();
 const runSprintsMock = vi.fn();
 const runIssueTypesMock = vi.fn();
 const runComponentsMock = vi.fn();
+const runVersionsMock = vi.fn();
 const runFieldsMock = vi.fn();
 const runLinkTypesMock = vi.fn();
 const runMeMock = vi.fn();
@@ -70,6 +71,7 @@ vi.mock('./commands/boards.js', () => ({ runBoards: (...a: unknown[]) => runBoar
 vi.mock('./commands/sprints.js', () => ({ runSprints: (...a: unknown[]) => runSprintsMock(...a) }));
 vi.mock('./commands/issuetypes.js', () => ({ runIssueTypes: (...a: unknown[]) => runIssueTypesMock(...a) }));
 vi.mock('./commands/components.js', () => ({ runComponents: (...a: unknown[]) => runComponentsMock(...a) }));
+vi.mock('./commands/versions.js', () => ({ runVersions: (...a: unknown[]) => runVersionsMock(...a) }));
 vi.mock('./commands/fields.js', () => ({ runFields: (...a: unknown[]) => runFieldsMock(...a) }));
 vi.mock('./commands/linktypes.js', () => ({ runLinkTypes: (...a: unknown[]) => runLinkTypesMock(...a) }));
 vi.mock('./commands/me.js', () => ({ runMe: (...a: unknown[]) => runMeMock(...a) }));
@@ -165,8 +167,27 @@ describe('create command wiring', () => {
     });
   });
 
+  it('collects repeatable --fix-versions/--affects-versions', async () => {
+    await run([
+      'create', '-o', 'acme', '-t', 'Bug', '-s', 'y',
+      '--fix-versions', '2.0.0', '--fix-versions', '2.1.0',
+      '--affects-versions', '1.9.0',
+    ]);
+    expect(firstArg(runCreateMock)).toMatchObject({
+      fixVersions: ['2.0.0', '2.1.0'],
+      affectsVersions: ['1.9.0'],
+    });
+  });
+
   it('errors via commander when the required -t option is missing', async () => {
     await expect(run(['create', '-s', 'x'])).rejects.toThrow();
+    expect(runCreateMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects a flag swallowed as a --fix-versions value', async () => {
+    await expect(
+      run(['create', '-o', 'acme', '-t', 'Bug', '-s', 'x', '--fix-versions', '--dry-run'])
+    ).rejects.toThrow();
     expect(runCreateMock).not.toHaveBeenCalled();
   });
 
@@ -199,6 +220,32 @@ describe('edit command wiring', () => {
   it('sets noWiki when --no-wiki is passed', async () => {
     await run(['edit', 'PROJ-1', '-d', 'body', '--no-wiki']);
     expect(firstArg(runEditMock)).toMatchObject({ issueKey: 'PROJ-1', noWiki: true });
+  });
+
+  it('collects repeatable --fix-versions/--affects-versions and passes an empty value through', async () => {
+    await run([
+      'edit', 'PROJ-1',
+      '--fix-versions', '2.0.0', '--fix-versions', '2.1.0',
+      '--affects-versions', '',
+    ]);
+    expect(firstArg(runEditMock)).toMatchObject({
+      issueKey: 'PROJ-1',
+      fixVersions: ['2.0.0', '2.1.0'],
+      affectsVersions: [''],
+    });
+  });
+
+  it('rejects a flag swallowed as a name-list value, so --dry-run is never lost', async () => {
+    for (const flag of ['--components', '--fix-versions', '--affects-versions']) {
+      runEditMock.mockClear();
+      await expect(run(['edit', 'PROJ-1', flag, '--dry-run'])).rejects.toThrow();
+      expect(runEditMock).not.toHaveBeenCalled();
+    }
+  });
+
+  it('still accepts a single-dash name such as -1.0', async () => {
+    await run(['edit', 'PROJ-1', '--fix-versions', '-1.0']);
+    expect(firstArg(runEditMock)).toMatchObject({ fixVersions: ['-1.0'] });
   });
 });
 
@@ -523,6 +570,11 @@ describe('list-style command wiring', () => {
   it('components maps -o/-P', async () => {
     await run(['components', '-o', 'acme', '-P', 'PROJ']);
     expect(firstArg(runComponentsMock)).toMatchObject({ org: 'acme', project: 'PROJ' });
+  });
+
+  it('versions maps -o/-P/--json', async () => {
+    await run(['versions', '-o', 'acme', '-P', 'PROJ', '--json']);
+    expect(firstArg(runVersionsMock)).toMatchObject({ org: 'acme', project: 'PROJ', json: true });
   });
 
   it('fields maps -o/-P/-t', async () => {

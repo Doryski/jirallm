@@ -173,6 +173,16 @@ export type JiraComponent = {
   description?: string;
 };
 
+export type JiraVersion = {
+  id: string;
+  name: string;
+  description?: string;
+  released?: boolean;
+  archived?: boolean;
+  releaseDate?: string;
+  startDate?: string;
+};
+
 export type JiraCreateField = {
   fieldId: string;
   name: string;
@@ -477,6 +487,25 @@ export const ATLASSIAN_REDIRECT_HOSTS = [
   '.atl-paas.net',
   '.atlassianusercontent.com',
 ] as const;
+
+const toNamedRefs = (names: string[]): Array<{ name: string }> => names.map((name) => ({ name }));
+
+type RawMetaField = {
+  name: string;
+  required: boolean;
+  schema?: { type?: string };
+  allowedValues?: Array<{ value?: string; name?: string }>;
+};
+
+const toScreenField = (fieldId: string, f: RawMetaField): JiraCreateField => ({
+  fieldId,
+  name: f.name,
+  required: f.required,
+  schemaType: f.schema?.type,
+  allowedValues: f.allowedValues
+    ?.map((v) => v.value ?? v.name)
+    .filter((v): v is string => Boolean(v)),
+});
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
@@ -1295,6 +1324,10 @@ export class JiraClient {
     return this.makeRequest<JiraComponent[]>(`/project/${projectKey}/components`);
   }
 
+  async listVersions(projectKey: string): Promise<JiraVersion[]> {
+    return this.makeRequest<JiraVersion[]>(`/project/${projectKey}/versions`);
+  }
+
   /**
    * Fetch the fields available on the create screen for a given issue type, including
    * allowedValues for select fields — helps users discover valid custom-field option strings.
@@ -1308,26 +1341,21 @@ export class JiraClient {
           `Available: ${types.map((t) => t.name).join(', ')}.`
       );
     }
-    type RawAllowed = { value?: string; name?: string };
-    type RawCreateField = {
-      fieldId: string;
-      name: string;
-      required: boolean;
-      schema?: { type?: string };
-      allowedValues?: RawAllowed[];
-    };
-    const response = await this.makeRequest<{ fields: RawCreateField[] }>(
+    const response = await this.makeRequest<{ fields: Array<RawMetaField & { fieldId: string }> }>(
       `/issue/createmeta/${projectKey}/issuetypes/${match.id}`
     );
-    return response.fields.map((f) => ({
-      fieldId: f.fieldId,
-      name: f.name,
-      required: f.required,
-      schemaType: f.schema?.type,
-      allowedValues: f.allowedValues
-        ?.map((v) => v.value ?? v.name)
-        .filter((v): v is string => Boolean(v)),
-    }));
+    return response.fields.map((f) => toScreenField(f.fieldId, f));
+  }
+
+  /**
+   * Fetch the fields on an existing issue's edit screen (`editmeta`), in the same shape as
+   * `getCreateFields`. A field missing here is one Jira rejects on edit for this issue.
+   */
+  async getEditFields(issueKey: string): Promise<JiraCreateField[]> {
+    const response = await this.makeRequest<{ fields: Record<string, RawMetaField> }>(
+      `/issue/${issueKey}/editmeta`
+    );
+    return Object.entries(response.fields).map(([fieldId, f]) => toScreenField(fieldId, f));
   }
 
   async listLinkTypes(): Promise<JiraIssueLinkType[]> {
@@ -1412,6 +1440,8 @@ export class JiraClient {
     priority?: string;
     parentKey?: string;
     components?: string[];
+    fixVersions?: string[];
+    versions?: string[];
     customFields?: Record<string, unknown>;
   }): Promise<{ id: string; key: string; self: string }> {
     const fields: Record<string, unknown> = {
@@ -1428,7 +1458,9 @@ export class JiraClient {
     if (input.labels) fields.labels = input.labels;
     if (input.priority) fields.priority = { name: input.priority };
     if (input.parentKey) fields.parent = { key: input.parentKey };
-    if (input.components) fields.components = input.components.map((name) => ({ name }));
+    if (input.components?.length) fields.components = toNamedRefs(input.components);
+    if (input.fixVersions?.length) fields.fixVersions = toNamedRefs(input.fixVersions);
+    if (input.versions?.length) fields.versions = toNamedRefs(input.versions);
     if (input.customFields) Object.assign(fields, input.customFields);
 
     const url = `${this.config.baseUrl}/rest/api/2/issue`;
@@ -1459,6 +1491,8 @@ export class JiraClient {
       parentKey?: string;
       dueDate?: string;
       components?: string[];
+      fixVersions?: string[];
+      versions?: string[];
       customFields?: Record<string, unknown>;
     }
   ): Promise<void> {
@@ -1478,7 +1512,9 @@ export class JiraClient {
     if (input.priority !== undefined) fields.priority = { name: input.priority };
     if (input.parentKey !== undefined) fields.parent = { key: input.parentKey };
     if (input.dueDate !== undefined) fields.duedate = input.dueDate;
-    if (input.components !== undefined) fields.components = input.components.map((name) => ({ name }));
+    if (input.components !== undefined) fields.components = toNamedRefs(input.components);
+    if (input.fixVersions !== undefined) fields.fixVersions = toNamedRefs(input.fixVersions);
+    if (input.versions !== undefined) fields.versions = toNamedRefs(input.versions);
     if (input.customFields !== undefined) Object.assign(fields, input.customFields);
 
     if (Object.keys(fields).length === 0) {

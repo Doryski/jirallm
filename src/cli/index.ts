@@ -2,7 +2,7 @@
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { realpathSync } from 'node:fs';
-import { Command, Option } from 'commander';
+import { Command, InvalidArgumentError, Option } from 'commander';
 import updateNotifier from 'update-notifier';
 import { JiraExporter } from '../lib/exporter.js';
 import { listOrgs, loadProfile } from '../lib/config.js';
@@ -34,6 +34,7 @@ import { runBoards } from './commands/boards.js';
 import { runSprints } from './commands/sprints.js';
 import { runIssueTypes } from './commands/issuetypes.js';
 import { runComponents } from './commands/components.js';
+import { runVersions } from './commands/versions.js';
 import { runFields } from './commands/fields.js';
 import { runLinkTypes } from './commands/linktypes.js';
 import { runMe } from './commands/me.js';
@@ -872,6 +873,14 @@ function collect(value: string, previous: string[] = []): string[] {
   return [...previous, value];
 }
 
+/** Like `collect`, but rejects a flag swallowed as the value (`--fix-versions --dry-run`). */
+function collectName(value: string, previous: string[] = []): string[] {
+  if (value.startsWith('--')) {
+    throw new InvalidArgumentError(`"${value}" looks like a flag, not a name. Pass a value (use '' to clear).`);
+  }
+  return collect(value, previous);
+}
+
 /** Shared --attach-images / --attach-media / --image-* options (ADF media embedding). */
 function addImageOptions(cmd: Command): Command {
   return cmd
@@ -1102,6 +1111,26 @@ Examples:
   );
 
 program
+  .command('versions')
+  .description('List versions defined on a project.')
+  .option('-o, --org <name>', 'Organization name (auto-resolved from the project key if unique)')
+  .option('-P, --project <key>', 'Project key (auto-selected when the org has a single project)')
+  .option('--json', 'Output JSON instead of human-readable')
+  .action(async (opts: { org?: string; project?: string; json?: boolean }) => {
+    try { await runVersions(opts); } catch (err) { exitOnError(err); }
+  })
+  .addHelpText(
+    'after',
+    `
+The "name" values are what \`jirallm create/edit --fix-versions / --affects-versions\` expect.
+
+Examples:
+  $ jirallm versions -o acme -P PROJ
+  $ jirallm versions -o acme -P PROJ --json
+`
+  );
+
+program
   .command('fields')
   .description('List custom fields (and select options with --type) for use with --field.')
   .option('-o, --org <name>', 'Organization name (auto-resolved from the -P project key when it maps to a unique org)')
@@ -1268,7 +1297,9 @@ addImageOptions(
   .option('-l, --labels <list>', 'Comma-separated labels')
   .option('--priority <name>', 'Priority name (e.g. High)')
   .option('--parent <key>', 'Parent issue key (for subtasks / epic children)')
-  .option('--components <name>', 'Component name (repeatable; pass once per component)', collect)
+  .option('--components <name>', 'Component name (repeatable; pass once per component)', collectName)
+  .option('--fix-versions <name>', 'Fix version name (repeatable; pass once per version)', collectName)
+  .option('--affects-versions <name>', 'Affects version name (repeatable; pass once per version)', collectName)
   .option(
     '-F, --field <pair>',
     'Set a custom field: friendlyName=value or customfield_NNNNN[:type]=value (repeatable). Use name= or name=null to clear.',
@@ -1279,7 +1310,7 @@ addImageOptions(
   .option('--dry-run', 'Show what would be created without calling Jira')
   .option('--json', 'Output JSON instead of human-readable')
 )
-  .action(async (opts: { org?: string; project?: string; type: string; summary: string; description?: string; descriptionFile?: string; wiki?: boolean; assignee?: string; labels?: string; priority?: string; parent?: string; components?: string[]; field?: string[]; sprint?: string; board?: string; attach?: string[]; attachImages?: string[]; attachMedia?: string[]; imageLayout?: string; imageWidth?: string; dryRun?: boolean; json?: boolean }) => {
+  .action(async (opts: { org?: string; project?: string; type: string; summary: string; description?: string; descriptionFile?: string; wiki?: boolean; assignee?: string; labels?: string; priority?: string; parent?: string; components?: string[]; fixVersions?: string[]; affectsVersions?: string[]; field?: string[]; sprint?: string; board?: string; attach?: string[]; attachImages?: string[]; attachMedia?: string[]; imageLayout?: string; imageWidth?: string; dryRun?: boolean; json?: boolean }) => {
     try {
       await runCreate({
         org: opts.org,
@@ -1294,6 +1325,8 @@ addImageOptions(
         priority: opts.priority,
         parent: opts.parent,
         components: opts.components,
+        fixVersions: opts.fixVersions,
+        affectsVersions: opts.affectsVersions,
         field: opts.field,
         sprint: opts.sprint,
         board: opts.board,
@@ -1312,6 +1345,8 @@ addImageOptions(
     `
 Run \`jirallm issuetypes -o <org>\` to discover valid --type values.
 Run \`jirallm components -o <org> -P <project>\` to discover valid --components names.
+Run \`jirallm versions -o <org> -P <project>\` to discover valid --fix-versions / --affects-versions names.
+Version flags are checked against the issue type's create screen before the issue is created (skipped on --dry-run).
 Run \`jirallm fields -o <org> -P <project> --type Bug\` to discover custom field ids and select options.
 Get a user's accountId via \`jirallm me -o <org>\` (for the current user).
 --description is markdown; it gets converted to Jira wiki on the way in (pass --no-wiki to send it as-is).
@@ -1329,6 +1364,7 @@ Examples:
   $ jirallm create -o acme -t Sub-task -s "Subtask of PROJ-1" --parent PROJ-1
   $ jirallm create -o acme -t Bug -s "Crash" --components Web --components API --field severity=High --field environment=PROD
   $ jirallm create -o acme -t Bug -s "Crash" --components "Frontend, Web & API"   # a single name containing a comma
+  $ jirallm create -o acme -t Bug -s "Crash" --fix-versions 2.4.0 --affects-versions 2.3.1
   $ jirallm create -o acme -t Story -s "Spike X" --sprint 42          # add to a sprint by id
   $ jirallm create -o acme -t Story -s "Spike X" --sprint active      # add to the board's active sprint
   $ jirallm create -o acme -t Bug -s "test" --dry-run --json
@@ -1355,7 +1391,9 @@ addImageOptions(
   .option('--priority <name>', 'Priority name')
   .option('--parent <key>', 'Parent issue key (reparent / set epic)')
   .option('--due <date>', 'Due date (YYYY-MM-DD)')
-  .option('--components <name>', 'Component name (repeatable; replaces existing set)', collect)
+  .option('--components <name>', 'Component name (repeatable; replaces existing set)', collectName)
+  .option('--fix-versions <name>', "Fix version name (repeatable; replaces existing set; pass '' to clear)", collectName)
+  .option('--affects-versions <name>', "Affects version name (repeatable; replaces existing set; pass '' to clear)", collectName)
   .option(
     '-F, --field <pair>',
     'Set a custom field: friendlyName=value or customfield_NNNNN[:type]=value (repeatable). Use name= or name=null to clear.',
@@ -1366,7 +1404,7 @@ addImageOptions(
   .option('--dry-run', 'Show what would change without calling Jira')
   .option('--json', 'Output JSON instead of human-readable')
 )
-  .action(async (issueKey: string, opts: { org?: string; summary?: string; description?: string; descriptionFile?: string; wiki?: boolean; assignee?: string; unassign?: boolean; labels?: string; priority?: string; parent?: string; due?: string; components?: string[]; field?: string[]; sprint?: string; board?: string; attach?: string[]; attachImages?: string[]; attachMedia?: string[]; imageLayout?: string; imageWidth?: string; dryRun?: boolean; json?: boolean }) => {
+  .action(async (issueKey: string, opts: { org?: string; summary?: string; description?: string; descriptionFile?: string; wiki?: boolean; assignee?: string; unassign?: boolean; labels?: string; priority?: string; parent?: string; due?: string; components?: string[]; fixVersions?: string[]; affectsVersions?: string[]; field?: string[]; sprint?: string; board?: string; attach?: string[]; attachImages?: string[]; attachMedia?: string[]; imageLayout?: string; imageWidth?: string; dryRun?: boolean; json?: boolean }) => {
     try {
       const { wiki, ...rest } = opts;
       await runEdit({ issueKey, ...rest, noWiki: wiki === false });
@@ -1375,7 +1413,10 @@ addImageOptions(
   .addHelpText(
     'after',
     `
---labels and --components REPLACE the existing sets; there is no add/remove syntax here.
+--labels, --components, --fix-versions and --affects-versions REPLACE the existing sets; there is no
+add/remove syntax here. Pass '' to clear a version set (e.g. --fix-versions '').
+Run \`jirallm versions -o <org> -P <project>\` to discover valid --fix-versions / --affects-versions names.
+Version flags are checked against the issue's edit screen before anything is written (skipped on --dry-run).
 --unassign and --assignee are mutually exclusive (use one).
 Custom fields work like \`create\`: --field friendlyName=value or --field customfield_NNNNN[:type]=value.
 Clear any nullable field with an empty or null value: --field reproductionRate= or --field reproductionRate=null.
@@ -1387,6 +1428,8 @@ Examples:
   $ jirallm edit PROJ-123 --labels backend,p1 --priority High
   $ jirallm edit PROJ-123 --parent PROJ-1 --due 2026-08-01
   $ jirallm edit PROJ-123 --components Web --components API --field reproductionRate=Always
+  $ jirallm edit PROJ-123 --fix-versions 2.4.0 --fix-versions 2.5.0   # move into two releases
+  $ jirallm edit PROJ-123 --fix-versions ''      # clear Fix versions
   $ jirallm edit PROJ-123 --sprint 42            # move into sprint 42
   $ jirallm edit PROJ-123 --sprint active        # move into the board's active sprint
   $ jirallm edit PROJ-123 --sprint none          # remove from its sprint
@@ -1396,7 +1439,8 @@ Examples:
   $ jirallm edit PROJ-123 --description-file ./updated.md --attach-images after.png:"After the fix"
 
 --attach / --attach-images only rewrite the description when --description/--description-file
-is also given; otherwise the files are uploaded and the description is left alone.
+is also given; otherwise the files are uploaded and the description is left alone. With only
+attachment flags, the files are uploaded and no field is changed.
 `
   );
 

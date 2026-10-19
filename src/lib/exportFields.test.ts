@@ -16,10 +16,50 @@ import {
   normalizeFieldName,
   parseFieldsFlag,
   resolveFieldSet,
+  systemFieldWriteHint,
   type CustomFieldDefs,
 } from './exportFields.js';
 
+describe('systemFieldWriteHint', () => {
+  it('folds case', () => {
+    expect(systemFieldWriteHint('FIXVERSIONS')).toContain('--fix-versions');
+  });
+
+  it('folds Jira-id aliases', () => {
+    expect(systemFieldWriteHint('duedate')).toContain('--due');
+    expect(systemFieldWriteHint('issuetype')).toContain('--type');
+  });
+
+  it('accepts keys outside BUILT_IN_FIELDS', () => {
+    expect(systemFieldWriteHint('affectsVersions')).toContain('--affects-versions');
+    expect(systemFieldWriteHint('summary')).toContain('--summary');
+    expect(systemFieldWriteHint('description')).toContain('--description');
+  });
+
+  it('returns undefined for custom-backed and unknown names', () => {
+    expect(systemFieldWriteHint('storyPoints')).toBeUndefined();
+    expect(systemFieldWriteHint('epic')).toBeUndefined();
+    expect(systemFieldWriteHint('foo')).toBeUndefined();
+  });
+
+  it('accepts the JQL singular spellings', () => {
+    expect(systemFieldWriteHint('fixVersion')).toContain('--fix-versions');
+    expect(systemFieldWriteHint('affectedVersion')).toContain('--affects-versions');
+  });
+
+  it('ignores Object.prototype keys', () => {
+    expect(systemFieldWriteHint('constructor')).toBeUndefined();
+    expect(systemFieldWriteHint('__proto__')).toBeUndefined();
+    expect(systemFieldWriteHint('toString')).toBeUndefined();
+  });
+});
+
 describe('normalizeFieldName', () => {
+  it('returns Object.prototype keys unchanged', () => {
+    expect(normalizeFieldName('constructor')).toBe('constructor');
+    expect(normalizeFieldName('__proto__')).toBe('__proto__');
+  });
+
   it('returns a friendly built-in name unchanged', () => {
     expect(normalizeFieldName('issueType')).toBe('issueType');
     expect(normalizeFieldName('status')).toBe('status');
