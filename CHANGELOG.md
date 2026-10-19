@@ -21,13 +21,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reported as such — e.g. `Fix versions isn't on the edit screen of CN-4467, so Jira would reject
   --fix-versions.`, which is common for Story/Task screens — and a name that is not one of the
   screen's allowed values is listed with the valid ones and a `did you mean` hint for a case-only
-  mismatch. Clearing with `''` only needs the field on the screen. The check costs one GET
-  (`create` shares its create-screen read with the `--field` guard), is skipped on `--dry-run`,
-  which stays offline, and warns and proceeds if the screen metadata can't be read. New client
-  method: `JiraClient.getEditFields(issueKey)`.
+  mismatch. Clearing with `''` only needs the field on the screen. On `edit` the check is one
+  `editmeta` read; on `create` it reuses the create-screen read the `--field` guard already makes.
+  It is skipped on `--dry-run`, which stays offline, and warns and proceeds if the screen metadata
+  can't be read. New client method: `JiraClient.getEditFields(issueKey)`.
 - `jirallm versions -o <org> -P <project>` lists a project's versions with their
   released / unreleased / archived status, the names `--fix-versions` / `--affects-versions`
-  expect (#27).
+  expect (#27). Library: `JiraClient.listVersions(projectKey)` and the `JiraVersion` type;
+  `createIssue` / `editIssue` accept `fixVersions` and `versions` name lists.
 - `--field` now recognises system-field keys (case-insensitively, with or without a `:type`
   suffix) and points to the dedicated flag instead of reporting an unknown custom field — e.g.
   `--field fixVersions:array=2.0.0` says to use `--fix-versions`, `--field status=Done` says to use
@@ -37,25 +38,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - `edit` uploaded `--attach` / `--attach-images` files before validating the rest of the input, so
-  a malformed `--field`, an unresolvable assignee or sprint, or a bad `--image-layout` failed after
-  the files were already on the issue (#27). Every check jirallm makes itself — including the
-  version screen check below — now runs before the first upload. Values only Jira validates
-  (component, priority or parent names) are still checked by Jira after the upload, so a rejected
-  one leaves the uploaded files in place.
+  a malformed `--field` or an unresolvable assignee or sprint failed after the files were already
+  on the issue (#27). Every check jirallm makes itself — including the version screen check above —
+  now runs before the first upload. Values only Jira validates (component, priority or parent
+  names) are still checked by Jira after the upload, so a rejected one leaves the uploaded files in
+  place.
 - `edit` with only attachment flags uploaded the files and then failed with
   `editIssue called with no fields to update.` (#27). It now uploads, leaves the fields alone and
   reports `{ issueKey, updated: false, attachments }`. `edit` with no field or attachment flag at
   all fails up front with `Nothing to edit: …`, before any network call — `--dry-run` included, so
-  `edit KEY --dry-run` alone (which used to print an empty preview) now exits 1.
-- A name-list flag followed directly by another flag (`--fix-versions --dry-run`) used to swallow
-  that flag as the name, silently dropping `--dry-run` and writing to Jira (#27). `--components`,
-  `--fix-versions` and `--affects-versions` now reject a value starting with `--`; single-dash
-  names such as `-1.0` still work.
+  `edit KEY --dry-run` alone (which used to print an empty preview) now exits 1. A dry run with
+  attachments no longer claims the files were uploaded, and lists them as `attach:` lines like
+  `create` does.
+- `--components` followed directly by another flag (`edit KEY --components --dry-run`) swallowed
+  that flag as the component name, so `--dry-run` was lost and Jira was written to with a
+  component called `--dry-run` (#27). `--components`, `--fix-versions` and `--affects-versions` now
+  reject a value starting with `--`; single-dash names such as `-1.0` still work.
 - `--field constructor=1` (or `__proto__`, `toString`, …) resolved against `Object.prototype` and
-  sent a field with an undefined id, and `Constructor` crashed with a `TypeError`; the same lookup
-  affected `--fields` on the read side (#27). Field-name lookups now only see own keys.
+  sent a custom field keyed `undefined`, and `fetch --fields constructor` failed with
+  `name.startsWith is not a function` instead of the unknown-field error (#27). Field-name lookups now only see own keys.
 - Repeated `--components` / `--labels` names are de-duplicated before they reach Jira, and
-  `create` no longer sends an empty `components` / `fixVersions` / `versions` list (#27).
+  `create --components ''` no longer sends an empty `components` list (#27).
 
 ## [0.13.1] - 2026-08-01
 
