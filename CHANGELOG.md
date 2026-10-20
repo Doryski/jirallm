@@ -6,6 +6,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- New client methods for editing and removing existing worklogs, plus reading one back by id:
+  `JiraClient.updateWorklog(issueKey, worklogId, payload)` (`PUT /rest/api/2/issue/{key}/worklog/{id}`,
+  any subset of `started` / `timeSpentSeconds` / plain-string `comment` / `visibility`, returns
+  `{ id, issueId }` like `addWorklog`), `JiraClient.deleteWorklog(issueKey, worklogId)`
+  (`DELETE …/worklog/{id}?adjustEstimate=leave`, so the remaining estimate is untouched) and
+  `JiraClient.getWorklog(issueKey, worklogId)` (returns `{ id, started, timeSpentSeconds,
+  authorAccountId?, comment? }`, an ADF comment converted to markdown). Failures throw
+  `JiraApiError` with the HTTP `status` — a worklog that no longer exists surfaces as `status: 404`
+  and is left to the caller to treat as already gone.
+- `fetchIssueWorklogs` (and `fetchIssueDetails(..., { includeWorklog: true })`) now also keeps each
+  worklog's `id`, `timeSpentSeconds` and `authorAccountId` on `WorklogSummary`, so callers can match
+  remote worklogs to local records. The fields are optional and set only when Jira returns them
+  (`authorAccountId` is Cloud-only). Existing fields and the markdown output are unchanged;
+  `fetch --with-worklog --json` gains the three keys per worklog.
+- The package root now exports the `WorklogSummary`, `WorklogWritePayload`, `WorklogWriteVisibility`,
+  `WorklogRef` and `JiraWorklog` types.
+
 ## [0.14.0] - 2026-10-19
 
 ### Added

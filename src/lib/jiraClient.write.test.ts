@@ -2,7 +2,7 @@ import { mkdtemp, writeFile, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { JiraClient } from './jiraClient.js';
+import { JiraClient, isJiraApiError } from './jiraClient.js';
 
 const FAKE_CONFIG = {
   baseUrl: 'https://example.atlassian.net',
@@ -723,6 +723,124 @@ describe('JiraClient.addWorklog', () => {
     await expect(
       client.addWorklog('PROJ-1', { started: 's', timeSpentSeconds: 60 })
     ).rejects.toThrow(/addWorklog failed: 403 Forbidden\nno worklog/);
+  });
+});
+
+describe('JiraClient.updateWorklog', () => {
+  it('PUTs /rest/api/2/issue/{key}/worklog/{id} with a plain-string comment', async () => {
+    const { client, calls } = captureFetch(() => ({ json: { id: 'w-1', issueId: '10000' } }));
+    const result = await client.updateWorklog('PROJ-1', 'w-1', {
+      timeSpentSeconds: 1800,
+      comment: 'edited',
+    });
+    expect(result).toEqual({ id: 'w-1', issueId: '10000' });
+    expect(calls[0].method).toBe('PUT');
+    expect(calls[0].url).toBe('https://example.atlassian.net/rest/api/2/issue/PROJ-1/worklog/w-1');
+    expect(calls[0].headers['Content-Type']).toBe('application/json');
+    expect(calls[0].body).toEqual({ timeSpentSeconds: 1800, comment: 'edited' });
+  });
+
+  it('throws a JiraApiError carrying the status on non-OK', async () => {
+    const { client } = captureFetch(() => ({
+      ok: false,
+      status: 400,
+      statusText: 'Bad Request',
+      text: '{"errorMessages":["bad started"]}',
+    }));
+    const error = await client
+      .updateWorklog('PROJ-1', 'w-1', { started: 'nope' })
+      .catch((e: unknown) => e);
+    expect(isJiraApiError(error)).toBe(true);
+    expect(error).toMatchObject({ status: 400, firstErrorMessage: 'bad started' });
+    expect((error as Error).message).toMatch(/updateWorklog failed: 400 Bad Request/);
+  });
+});
+
+describe('JiraClient.deleteWorklog', () => {
+  it('DELETEs /rest/api/2/issue/{key}/worklog/{id}?adjustEstimate=leave and tolerates 204', async () => {
+    const { client, calls } = captureFetch(() => ({ status: 204 }));
+    await expect(client.deleteWorklog('PROJ-1', 'w-1')).resolves.toBeUndefined();
+    expect(calls[0].method).toBe('DELETE');
+    expect(calls[0].url).toBe(
+      'https://example.atlassian.net/rest/api/2/issue/PROJ-1/worklog/w-1?adjustEstimate=leave'
+    );
+  });
+
+  it('surfaces 404 as a JiraApiError with status 404', async () => {
+    const { client } = captureFetch(() => ({
+      ok: false,
+      status: 404,
+      statusText: 'Not Found',
+      text: 'gone',
+    }));
+    const error = await client.deleteWorklog('PROJ-1', 'w-1').catch((e: unknown) => e);
+    expect(isJiraApiError(error)).toBe(true);
+    expect(error).toMatchObject({ status: 404, body: 'gone' });
+    expect((error as Error).message).toMatch(/deleteWorklog failed: 404 Not Found\ngone/);
+  });
+});
+
+describe('JiraClient.getWorklog', () => {
+  it('GETs /rest/api/2/issue/{key}/worklog/{id} and maps id/started/seconds/accountId/comment', async () => {
+    const { client, calls } = captureFetch(() => ({
+      json: {
+        id: 'w-1',
+        issueId: '10000',
+        author: { displayName: 'Alice', accountId: 'acc-1' },
+        started: '2026-01-01T09:00:00.000+0000',
+        timeSpent: '1h',
+        timeSpentSeconds: 3600,
+        comment: 'worked',
+      },
+    }));
+    const worklog = await client.getWorklog('PROJ-1', 'w-1');
+    expect(calls[0].method).toBe('GET');
+    expect(calls[0].url).toBe('https://example.atlassian.net/rest/api/2/issue/PROJ-1/worklog/w-1');
+    expect(worklog).toEqual({
+      id: 'w-1',
+      started: '2026-01-01T09:00:00.000+0000',
+      timeSpentSeconds: 3600,
+      authorAccountId: 'acc-1',
+      comment: 'worked',
+    });
+  });
+
+  it('converts an ADF comment to markdown and omits absent optional fields', async () => {
+    const { client } = captureFetch(() => ({
+      json: {
+        id: 'w-2',
+        author: { displayName: 'Server User' },
+        started: '2026-01-01T09:00:00.000+0000',
+        timeSpent: '30m',
+        timeSpentSeconds: 1800,
+        comment: {
+          version: 1,
+          type: 'doc',
+          content: [{ type: 'paragraph', content: [{ type: 'text', text: 'adf note' }] }],
+        },
+      },
+    }));
+    const worklog = await client.getWorklog('PROJ-1', 'w-2');
+    expect(worklog).toEqual({
+      id: 'w-2',
+      started: '2026-01-01T09:00:00.000+0000',
+      timeSpentSeconds: 1800,
+      comment: 'adf note\n',
+    });
+    expect('authorAccountId' in worklog).toBe(false);
+  });
+
+  it('surfaces 404 as a JiraApiError with status 404', async () => {
+    const { client } = captureFetch(() => ({
+      ok: false,
+      status: 404,
+      statusText: 'Not Found',
+      text: 'missing',
+    }));
+    const error = await client.getWorklog('PROJ-1', 'w-1').catch((e: unknown) => e);
+    expect(isJiraApiError(error)).toBe(true);
+    expect(error).toMatchObject({ status: 404 });
+    expect((error as Error).message).toMatch(/getWorklog failed: 404 Not Found\nmissing/);
   });
 });
 

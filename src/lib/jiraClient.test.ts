@@ -1106,7 +1106,7 @@ describe('JiraClient.fetchIssueWorklogs', () => {
     installFetchSequence([...pages]);
     const client = new JiraClient(FAKE_CONFIG, 'token');
     const worklogs = await client.fetchIssueWorklogs('PROJ-1');
-    expect(worklogs).toEqual([
+    expect(worklogs).toStrictEqual([
       {
         author: 'Alice',
         started: '2026-05-20T10:00:00.000+0200',
@@ -1119,6 +1119,37 @@ describe('JiraClient.fetchIssueWorklogs', () => {
         started: '2026-05-20T12:00:00.000+0200',
         timeSpent: '45m',
         comment: 'adf comment\n',
+      },
+    ]);
+  });
+
+  it('keeps id, timeSpentSeconds and author.accountId when Jira returns them', async () => {
+    installFetchSequence([
+      {
+        worklogs: [
+          {
+            id: '10101',
+            author: { displayName: 'Alice', accountId: 'acc-1' },
+            started: '2026-05-20T10:00:00.000+0200',
+            timeSpent: '1h 30m',
+            timeSpentSeconds: 5400,
+          },
+        ],
+        total: 1,
+        startAt: 0,
+        maxResults: 100,
+      },
+    ]);
+    const client = new JiraClient(FAKE_CONFIG, 'token');
+    const worklogs = await client.fetchIssueWorklogs('PROJ-1');
+    expect(worklogs).toStrictEqual([
+      {
+        author: 'Alice',
+        started: '2026-05-20T10:00:00.000+0200',
+        timeSpent: '1h 30m',
+        id: '10101',
+        timeSpentSeconds: 5400,
+        authorAccountId: 'acc-1',
       },
     ]);
   });

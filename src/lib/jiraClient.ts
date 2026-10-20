@@ -91,6 +91,38 @@ export type WorklogSummary = {
   started: string;
   timeSpent: string;
   comment?: string;
+  id?: string;
+  timeSpentSeconds?: number;
+  authorAccountId?: string;
+};
+
+export type WorklogWriteVisibility = { type: 'group' | 'role'; value: string };
+
+export type WorklogWritePayload = {
+  started: string;
+  timeSpentSeconds: number;
+  comment?: string;
+  visibility?: WorklogWriteVisibility;
+};
+
+export type WorklogRef = { id: string; issueId: string };
+
+export type JiraWorklog = {
+  id: string;
+  started: string;
+  timeSpentSeconds: number;
+  authorAccountId?: string;
+  comment?: string;
+};
+
+type RawJiraWorklog = {
+  id: string;
+  issueId?: string;
+  author: { displayName: string; accountId?: string };
+  started: string;
+  timeSpent: string;
+  timeSpentSeconds: number;
+  comment?: string | JiraADFDocument;
 };
 
 export type JiraBoard = { id: number; name: string; type: string };
@@ -999,12 +1031,7 @@ export class JiraClient {
 
     do {
       const response = await this.makeRequest<{
-        worklogs: Array<{
-          author: { displayName: string };
-          started: string;
-          timeSpent: string;
-          comment?: string | JiraADFDocument;
-        }>;
+        worklogs: Array<Partial<RawJiraWorklog> & Pick<RawJiraWorklog, 'author' | 'started' | 'timeSpent'>>;
         total: number;
         startAt: number;
         maxResults: number;
@@ -1017,6 +1044,9 @@ export class JiraClient {
           timeSpent: worklog.timeSpent,
         };
         if (worklog.comment) entry.comment = this.convertADFToMarkdown(worklog.comment);
+        if (worklog.id !== undefined) entry.id = worklog.id;
+        if (worklog.timeSpentSeconds !== undefined) entry.timeSpentSeconds = worklog.timeSpentSeconds;
+        if (worklog.author.accountId !== undefined) entry.authorAccountId = worklog.author.accountId;
         worklogs.push(entry);
       }
 
@@ -1077,18 +1107,19 @@ export class JiraClient {
     return { id: json.id };
   }
 
-  async addWorklog(
-    issueKey: string,
-    payload: {
-      started: string;
-      timeSpentSeconds: number;
-      comment?: string;
-      visibility?: { type: 'group' | 'role'; value: string };
-    }
-  ): Promise<{ id: string; issueId: string }> {
-    const url = `${this.config.baseUrl}/rest/api/2/issue/${issueKey}/worklog`;
+  private worklogUrl(issueKey: string, worklogId?: string): string {
+    const base = `${this.config.baseUrl}/rest/api/2/issue/${issueKey}/worklog`;
+    return worklogId === undefined ? base : `${base}/${worklogId}`;
+  }
+
+  private async sendWorklogWrite(
+    url: string,
+    method: 'POST' | 'PUT',
+    payload: Partial<WorklogWritePayload>,
+    label: string
+  ): Promise<WorklogRef> {
     const response = await this.httpRequest(url, {
-      method: 'POST',
+      method,
       headers: {
         Authorization: this.authHeader,
         Accept: 'application/json',
@@ -1097,10 +1128,60 @@ export class JiraClient {
       body: JSON.stringify(payload),
     });
     if (!response.ok) {
-      throw await JiraApiError.fromResponse(response, 'Jira addWorklog failed');
+      throw await JiraApiError.fromResponse(response, `Jira ${label} failed`);
     }
-    const json = (await response.json()) as { id: string; issueId: string };
+    const json = (await response.json()) as WorklogRef;
     return { id: json.id, issueId: json.issueId };
+  }
+
+  async addWorklog(issueKey: string, payload: WorklogWritePayload): Promise<WorklogRef> {
+    return this.sendWorklogWrite(this.worklogUrl(issueKey), 'POST', payload, 'addWorklog');
+  }
+
+  async updateWorklog(
+    issueKey: string,
+    worklogId: string,
+    payload: Partial<WorklogWritePayload>
+  ): Promise<WorklogRef> {
+    return this.sendWorklogWrite(
+      this.worklogUrl(issueKey, worklogId),
+      'PUT',
+      payload,
+      'updateWorklog'
+    );
+  }
+
+  async deleteWorklog(issueKey: string, worklogId: string): Promise<void> {
+    const url = `${this.worklogUrl(issueKey, worklogId)}?adjustEstimate=leave`;
+    const response = await this.httpRequest(url, {
+      method: 'DELETE',
+      headers: { Authorization: this.authHeader, Accept: 'application/json' },
+    });
+    if (!response.ok && response.status !== 204) {
+      throw await JiraApiError.fromResponse(response, 'Jira deleteWorklog failed');
+    }
+  }
+
+  async getWorklog(issueKey: string, worklogId: string): Promise<JiraWorklog> {
+    const response = await this.httpRequest(this.worklogUrl(issueKey, worklogId), {
+      method: 'GET',
+      headers: { Authorization: this.authHeader, Accept: 'application/json' },
+    });
+    if (!response.ok) {
+      throw await JiraApiError.fromResponse(response, 'Jira getWorklog failed');
+    }
+    const raw = (await response.json()) as RawJiraWorklog;
+    const worklog: JiraWorklog = {
+      id: raw.id,
+      started: raw.started,
+      timeSpentSeconds: raw.timeSpentSeconds,
+    };
+    if (raw.author?.accountId !== undefined) worklog.authorAccountId = raw.author.accountId;
+    if (raw.comment) {
+      worklog.comment =
+        typeof raw.comment === 'string' ? raw.comment : this.convertADFToMarkdown(raw.comment);
+    }
+    return worklog;
   }
 
   async updateComment(issueKey: string, commentId: string, wikiBody: string): Promise<void> {

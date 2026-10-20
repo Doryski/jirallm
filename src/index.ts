@@ -33,6 +33,11 @@ export type {
   ParentRef,
   TimeTrackingSummary,
   FetchIssueDetailsOptions,
+  WorklogSummary,
+  WorklogWritePayload,
+  WorklogWriteVisibility,
+  WorklogRef,
+  JiraWorklog,
 } from './lib/jiraClient.js';
 export {
   formatCustomFieldWrite,
