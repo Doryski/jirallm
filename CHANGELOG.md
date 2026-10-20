@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-20
+
 ### Added
 
 - New client methods for editing and removing existing worklogs, plus reading one back by id:
@@ -466,6 +468,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   except macOS without Homebrew, where it defaults to no (since setup may
   cascade into a long Homebrew + Xcode CLT install).
 
+[0.15.0]: https://github.com/doryski/jirallm/releases/tag/v0.15.0
 [0.14.0]: https://github.com/doryski/jirallm/releases/tag/v0.14.0
 [0.13.1]: https://github.com/doryski/jirallm/releases/tag/v0.13.1
 [0.13.0]: https://github.com/doryski/jirallm/releases/tag/v0.13.0
