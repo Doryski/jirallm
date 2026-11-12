@@ -3,6 +3,7 @@ import { loadProfile } from '../../lib/config.js';
 import { JiraClient } from '../../lib/jiraClient.js';
 import { markdownToWiki } from '../../lib/markdownToWiki.js';
 import { resolveOrg } from '../resolveOrg.js';
+import { readPipedStdin } from '../stdin.js';
 import {
   validateAll,
   formatStartedForJira,
@@ -22,11 +23,14 @@ export type WorklogOptions = {
 
 type Resolved = ValidatedWorklog & { resolvedOrg: string };
 
+const WORKLOG_STDIN_HINT =
+  'pass <issue-key> <duration> or --file, or pipe a JSON array of entries (e.g. `cat worklogs.json | jirallm worklog`).';
+
 function readEntries(opts: WorklogOptions): unknown[] {
   if (opts.issueKey && opts.duration) {
     return [{ issueKey: opts.issueKey, duration: opts.duration }];
   }
-  const raw = opts.file ? readFileSync(opts.file, 'utf-8') : readFileSync(0, 'utf-8');
+  const raw = opts.file ? readFileSync(opts.file, 'utf-8') : readPipedStdin(WORKLOG_STDIN_HINT);
   if (!raw.trim()) throw new Error('Empty input.');
 
   let parsed: unknown;

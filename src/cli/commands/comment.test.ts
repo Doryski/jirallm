@@ -439,6 +439,28 @@ describe('runEditComment', () => {
   });
 });
 
+describe('comment body from a terminal stdin (issue #28: EAGAIN class)', () => {
+  const originalStdinIsTTY = process.stdin.isTTY;
+
+  afterEach(() => {
+    Object.defineProperty(process.stdin, 'isTTY', { value: originalStdinIsTTY, configurable: true });
+  });
+
+  it.each([
+    ['comment', () => runComment('PROJ-1', {})],
+    ['comment:edit', () => runEditComment('PROJ-1', '55', {})],
+  ])('%s without --text/--file on a TTY fails with a one-line hint and calls no Jira API', async (_label, run) => {
+    Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
+
+    await expect(run()).rejects.toThrow(
+      'stdin is a terminal — pass --text or --file, or pipe the body (e.g. `cat note.md | jirallm comment PROJ-123`).'
+    );
+    expect(addCommentMock).not.toHaveBeenCalled();
+    expect(getCommentMock).not.toHaveBeenCalled();
+    expect(updateCommentMock).not.toHaveBeenCalled();
+  });
+});
+
 describe('runCommentList', () => {
   const sample = [
     { id: '1', author: { displayName: 'Alice' }, created: '2026-01-01', body: 'hello world' },

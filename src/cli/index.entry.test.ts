@@ -35,3 +35,25 @@ describe('CLI entry via symlink (regression: isRunAsEntry must resolve symlinks)
     expect(stdout).toContain('Usage: jirallm');
   }, 30000);
 });
+
+describe('CLI entry error output (issue #28: user errors surfaced as stack traces)', () => {
+  it('prints an error thrown from an unwrapped action as one clean line and exits 1', async () => {
+    const env = { ...process.env, DEBUG: '' };
+    const result = await execFileAsync(tsxBin, [cliPath, 'orgs', 'rm'], { env }).catch(
+      (err: { code: number; stderr: string }) => err
+    );
+
+    expect(result).toMatchObject({ code: 1 });
+    expect(result.stderr.trim()).toBe('Organization name is required (positional or --org).');
+  }, 30000);
+
+  it('includes the stack when DEBUG is set', async () => {
+    const env = { ...process.env, DEBUG: '1' };
+    const result = await execFileAsync(tsxBin, [cliPath, 'orgs', 'rm'], { env }).catch(
+      (err: { code: number; stderr: string }) => err
+    );
+
+    expect(result).toMatchObject({ code: 1 });
+    expect(result.stderr).toMatch(/\n\s+at /);
+  }, 30000);
+});

@@ -52,16 +52,45 @@ function setStdin(input: string) {
   stdinInput = input;
 }
 
+const originalStdinIsTTY = process.stdin.isTTY;
+
+function setStdinTTY(value: boolean | undefined) {
+  Object.defineProperty(process.stdin, 'isTTY', { value, configurable: true });
+}
+
 beforeEach(() => {
   captureConsole();
   addWorklogMock.mockReset();
   originalExitCode = process.exitCode;
   process.exitCode = 0;
+  setStdinTTY(false);
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
   process.exitCode = originalExitCode;
+  setStdinTTY(originalStdinIsTTY);
+});
+
+describe('runWorklog with a terminal stdin (issue #28: EAGAIN class)', () => {
+  it('fails with a one-line hint instead of reading the terminal when no entries are given', async () => {
+    setStdinTTY(true);
+
+    await expect(runWorklog({ org: 'solo' })).rejects.toThrow(
+      'stdin is a terminal — pass <issue-key> <duration> or --file, or pipe a JSON array of entries (e.g. `cat worklogs.json | jirallm worklog`).'
+    );
+    expect(addWorklogMock).not.toHaveBeenCalled();
+  });
+
+  it('does not touch stdin for the quick form, even on a terminal', async () => {
+    setStdinTTY(true);
+    addWorklogMock.mockResolvedValue({ id: 'w1' });
+
+    await runWorklog({ org: 'solo', issueKey: 'PROJ-1', duration: '1h', dryRun: true });
+
+    expect(addWorklogMock).not.toHaveBeenCalled();
+    expect(logs.join('\n')).toContain('PROJ-1');
+  });
 });
 
 describe('runWorklog (dry-run)', () => {

@@ -14,6 +14,7 @@ import {
   IMAGE_LAYOUTS,
 } from '../lib/adfMedia.js';
 import { DEFAULT_DESCRIPTION_FORMAT, DESCRIPTION_FORMATS } from '../lib/descriptionFormat.js';
+import { exitOnError } from './errors.js';
 import { runInit } from './commands/init.js';
 import { runAuthSet, runAuthRm, runAuthList, runAuthStatus } from './commands/auth.js';
 import { runOrgsList, runOrgsRemove, runProjectRemove } from './commands/orgs.js';
@@ -381,12 +382,15 @@ addExportOptions(program.command('export [issue-keys...]'))
 program
   .command('init')
   .description('Interactive setup wizard — creates an org or adds a project, and stores the API token in your OS keychain')
-  .option('--org <name>', 'Organization name (non-interactive)')
-  .option('--base-url <url>', 'Jira base URL (non-interactive)')
-  .option('--email <email>', 'Jira user email (non-interactive)')
-  .option('--project <key>', 'Project key (non-interactive)')
-  .option('--token-stdin', 'Read the API token from stdin (non-interactive)')
-  .option('-y, --yes', 'Skip confirmation prompts (non-interactive)')
+  .option('--org <name>', 'Organization name (skips the wizard)')
+  .option('--base-url <url>', 'Jira base URL (skips the wizard)')
+  .option('--email <email>', 'Jira user email (skips the wizard; prompted for in a terminal when omitted)')
+  .option('--project <key>', 'Project key (skips the wizard)')
+  .option(
+    '--token-stdin',
+    'Read the API token from piped stdin — a switch that takes no value (e.g. `pbpaste | jirallm init … --token-stdin`). Without it, the token comes from JIRALLM_API_TOKEN or a masked prompt in a terminal'
+  )
+  .option('-y, --yes', 'Skip confirmation prompts (skips the wizard)')
   .action(
     async (opts: {
       org?: string;
@@ -408,7 +412,8 @@ for a specific org) when no keychain token is stored.
 
 Examples:
   $ jirallm init
-  $ jirallm init --org acme --base-url https://acme.atlassian.net --email me@acme.com --project PROJ --token-stdin --yes
+  $ jirallm init --org acme --base-url https://acme.atlassian.net --email me@acme.com --project PROJ
+  $ pbpaste | jirallm init --org acme --base-url https://acme.atlassian.net --email me@acme.com --project PROJ --token-stdin --yes
 `
   );
 
@@ -849,24 +854,6 @@ Examples:
   $ jirallm comment:edit PROJ-123 26215 --text "wip" --dry-run --json
 `
   );
-
-function jsonModeRequested(): boolean {
-  return process.argv.includes('--json');
-}
-
-function reportError(err: unknown): void {
-  const message = (err as Error).message ?? String(err);
-  if (jsonModeRequested()) {
-    console.error(JSON.stringify({ error: message }));
-    return;
-  }
-  console.error(message);
-}
-
-function exitOnError(err: unknown): never {
-  reportError(err);
-  process.exit(1);
-}
 
 /** Commander collector for repeatable options (e.g. --field a=1 --field b=2). */
 function collect(value: string, previous: string[] = []): string[] {
@@ -1608,12 +1595,5 @@ function isRunAsEntry(): boolean {
 if (isRunAsEntry()) {
   buildProgram()
     .parseAsync(process.argv)
-    .catch((error: unknown) => {
-      if (process.argv.includes('--json')) {
-        console.error(JSON.stringify({ error: (error as Error).message ?? String(error) }));
-        process.exit(1);
-      }
-      console.error('Unexpected error:', error);
-      process.exit(1);
-    });
+    .catch(exitOnError);
 }

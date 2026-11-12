@@ -75,7 +75,14 @@ const setTokenMock = vi.mocked(setToken);
 
 const cancelled = () => Symbol('cancel');
 
+const originalStdinIsTTY = process.stdin.isTTY;
+
+function setStdinTTY(value: boolean | undefined) {
+  Object.defineProperty(process.stdin, 'isTTY', { value, configurable: true });
+}
+
 beforeEach(() => {
+  setStdinTTY(false);
   vi.spyOn(console, 'log').mockImplementation(() => {});
   vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
     throw new Error(`exit:${code ?? 0}`);
@@ -102,6 +109,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   delete process.env.JIRALLM_API_TOKEN;
+  setStdinTTY(originalStdinIsTTY);
 });
 
 describe('runInit (non-interactive)', () => {
@@ -223,6 +231,131 @@ describe('runInit (non-interactive)', () => {
     await expect(runInit({ email: 'me@acme.com', project: '1bad' })).rejects.toThrow(/project key/i);
     expect(getCurrentUserMock).not.toHaveBeenCalled();
     expect(upsertOrgMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('runInit (flags in a terminal) — issue #28', () => {
+  const fullFlags = {
+    org: 'acme',
+    baseUrl: 'https://acme.atlassian.net',
+    email: 'me@example.com',
+    project: 'PROJ',
+  };
+
+  beforeEach(() => {
+    setStdinTTY(true);
+    delete process.env.JIRALLM_API_TOKEN;
+  });
+
+  it('prompts for the token (masked) and completes when flags are given without a token source', async () => {
+    passwordMock.mockResolvedValueOnce('typed-token');
+
+    await runInit(fullFlags);
+
+    expect(passwordMock).toHaveBeenCalledTimes(1);
+    expect(readFileSyncMock).not.toHaveBeenCalled();
+    expect(constructed[0].token).toBe('typed-token');
+    expect(setTokenMock).toHaveBeenCalledWith('acme', 'typed-token');
+    expect(upsertOrgMock).toHaveBeenCalledWith(expect.objectContaining({ name: 'acme', userEmail: 'me@example.com' }));
+    expect(upsertProjectMock).toHaveBeenCalledWith('acme', { key: 'PROJ' });
+  });
+
+  it.each([
+    ['full flags', fullFlags],
+    ['--yes', { ...fullFlags, yes: true }],
+    ['only --email', { email: 'me@acme.com' }],
+  ])('rejects --token-stdin on a terminal with a one-line hint and never reads fd 0 (%s)', async (_label, flags) => {
+    await expect(runInit({ ...flags, tokenStdin: true })).rejects.toThrow(
+      /^stdin is a terminal — pipe the token, e\.g\. `pbpaste \| jirallm init … --token-stdin`/
+    );
+
+    expect(readFileSyncMock).not.toHaveBeenCalled();
+    expect(passwordMock).not.toHaveBeenCalled();
+    expect(getCurrentUserMock).not.toHaveBeenCalled();
+    expect(setTokenMock).not.toHaveBeenCalled();
+    expect(upsertOrgMock).not.toHaveBeenCalled();
+  });
+
+  it('prefers JIRALLM_API_TOKEN over the prompt', async () => {
+    process.env.JIRALLM_API_TOKEN = 'env-token';
+
+    await runInit(fullFlags);
+
+    expect(passwordMock).not.toHaveBeenCalled();
+    expect(constructed[0].token).toBe('env-token');
+  });
+
+  it('prompts for a missing --email, then derives org and base URL from it', async () => {
+    textMock.mockResolvedValueOnce('me@acme.com');
+    passwordMock.mockResolvedValueOnce('typed-token');
+
+    await runInit({ project: 'PROJ' });
+
+    expect(textMock).toHaveBeenCalledTimes(1);
+    expect(constructed[0].config).toEqual({ baseUrl: 'https://acme.atlassian.net', userEmail: 'me@acme.com' });
+    expect(setTokenMock).toHaveBeenCalledWith('acme', 'typed-token');
+  });
+
+  it('still rejects an invalid --email instead of prompting', async () => {
+    await expect(runInit({ email: 'nope' })).rejects.toThrow(/email/i);
+
+    expect(textMock).not.toHaveBeenCalled();
+    expect(passwordMock).not.toHaveBeenCalled();
+  });
+
+  it('exits without saving when the token prompt is cancelled', async () => {
+    passwordMock.mockResolvedValueOnce(cancelled());
+
+    await expect(runInit(fullFlags)).rejects.toThrow('exit:0');
+
+    expect(getCurrentUserMock).not.toHaveBeenCalled();
+    expect(setTokenMock).not.toHaveBeenCalled();
+    expect(upsertOrgMock).not.toHaveBeenCalled();
+  });
+
+  it('validates flags before prompting, so a bad --base-url never asks for a token', async () => {
+    await expect(runInit({ ...fullFlags, baseUrl: 'ftp://acme.example' })).rejects.toThrow(/base-url/i);
+
+    expect(passwordMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('runInit (flags without a terminal: CI / scripts)', () => {
+  it.each([
+    ['a pipe', false],
+    ['a redirected file', undefined],
+  ])('reads a piped --token-stdin token when stdin is %s', async (_label, isTTY) => {
+    setStdinTTY(isTTY);
+    delete process.env.JIRALLM_API_TOKEN;
+    readFileSyncMock.mockReturnValue('piped-token\n');
+
+    await runInit({ email: 'me@acme.com', tokenStdin: true, yes: true });
+
+    expect(constructed[0].token).toBe('piped-token');
+    expect(passwordMock).not.toHaveBeenCalled();
+  });
+
+  it('uses JIRALLM_API_TOKEN without prompting', async () => {
+    process.env.JIRALLM_API_TOKEN = 'env-token';
+
+    await runInit({ email: 'me@acme.com', yes: true });
+
+    expect(constructed[0].token).toBe('env-token');
+    expect(passwordMock).not.toHaveBeenCalled();
+  });
+
+  it('fails with an actionable message (never prompts) when no token source exists', async () => {
+    delete process.env.JIRALLM_API_TOKEN;
+
+    await expect(runInit({ email: 'me@acme.com', yes: true })).rejects.toThrow(
+      'No API token provided. Pipe it with --token-stdin (e.g. `pbpaste | jirallm init … --token-stdin`) or set JIRALLM_API_TOKEN.'
+    );
+    expect(passwordMock).not.toHaveBeenCalled();
+  });
+
+  it('requires --email (never prompts) when it is missing', async () => {
+    await expect(runInit({ org: 'acme', yes: true })).rejects.toThrow(/email/i);
+    expect(textMock).not.toHaveBeenCalled();
   });
 });
 

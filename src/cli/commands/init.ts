@@ -1,5 +1,5 @@
 import { intro, outro, text, password, confirm, select, multiselect, isCancel, cancel, note } from '@clack/prompts';
-import { readFileSync } from 'fs';
+import { readPipedStdin } from '../stdin.js';
 import {
   resolveConfigPath,
   readConfig,
@@ -80,6 +80,27 @@ async function promptOrg(existingOrgNames: string[]): Promise<{ name: string; is
   return { name, isNew: true };
 }
 
+async function promptEmail(): Promise<string> {
+  return exitIfCancelled(
+    await text({
+      message:
+        'Jira account email\n\x1b[2mThe email you log into Jira with — used together with the API token for auth.\x1b[22m',
+      placeholder: 'you@example.com',
+      validate: (v) => (v && v.includes('@') ? undefined : 'Looks invalid'),
+    })
+  );
+}
+
+async function promptToken(): Promise<string> {
+  return exitIfCancelled(
+    await password({
+      message:
+        'Jira API token\n\x1b[2mCreate one at https://id.atlassian.com/manage-profile/security/api-tokens. Stored in your OS keychain.\x1b[22m',
+      validate: (v) => (v ? undefined : 'Required'),
+    })
+  );
+}
+
 async function promptOrgFields(name: string): Promise<{
   org: Organization;
   apiToken: string;
@@ -96,14 +117,7 @@ async function promptOrgFields(name: string): Promise<{
     })
   );
 
-  const userEmail = exitIfCancelled(
-    await text({
-      message:
-        'Jira account email\n\x1b[2mThe email you log into Jira with — used together with the API token for auth.\x1b[22m',
-      placeholder: 'you@example.com',
-      validate: (v) => (v && v.includes('@') ? undefined : 'Looks invalid'),
-    })
-  );
+  const userEmail = await promptEmail();
 
   const includeSubtasks = exitIfCancelled(
     await confirm({
@@ -148,13 +162,7 @@ async function promptOrgFields(name: string): Promise<{
     videoFrames = { enabled: false };
   }
 
-  const apiToken = exitIfCancelled(
-    await password({
-      message:
-        'Jira API token\n\x1b[2mCreate one at https://id.atlassian.com/manage-profile/security/api-tokens. Stored in your OS keychain.\x1b[22m',
-      validate: (v) => (v ? undefined : 'Required'),
-    })
-  );
+  const apiToken = await promptToken();
 
   const org: Organization = {
     name,
@@ -211,7 +219,7 @@ async function promptProject(orgName: string, existingKeys: string[]): Promise<P
   return parsed.map((key) => ({ key, outputDir: dir }));
 }
 
-function isNonInteractive(opts: InitOptions): boolean {
+function hasSetupFlags(opts: InitOptions): boolean {
   return Boolean(
     opts.org || opts.baseUrl || opts.email || opts.project || opts.tokenStdin || opts.yes
   );
@@ -226,17 +234,32 @@ function defaultBaseUrl(domainLabel: string): string {
   return `https://${domainLabel}.atlassian.net`;
 }
 
-function readTokenFromStdinOrEnv(opts: InitOptions): string {
-  if (opts.tokenStdin) {
-    const raw = readFileSync(0, 'utf-8').trim();
-    if (!raw) throw new Error('--token-stdin was set but no token was received on stdin.');
-    return raw;
-  }
+const TOKEN_PIPE_EXAMPLE = '`pbpaste | jirallm init … --token-stdin`';
+
+function readTokenFromStdin(): string {
+  const raw = readPipedStdin(
+    `pipe the token, e.g. ${TOKEN_PIPE_EXAMPLE}, or drop --token-stdin to be prompted for it.`
+  ).trim();
+  if (!raw) throw new Error('--token-stdin was set but no token was received on stdin.');
+  return raw;
+}
+
+async function resolveToken(opts: InitOptions): Promise<string> {
+  if (opts.tokenStdin) return readTokenFromStdin();
   const env = process.env.JIRALLM_API_TOKEN?.trim();
   if (env) return env;
+  if (process.stdin.isTTY) return promptToken();
   throw new Error(
-    'No API token provided. Pass --token-stdin (piping the token) or set JIRALLM_API_TOKEN.'
+    `No API token provided. Pipe it with --token-stdin (e.g. ${TOKEN_PIPE_EXAMPLE}) or set JIRALLM_API_TOKEN.`
   );
+}
+
+async function resolveEmail(email: string | undefined): Promise<string> {
+  if (email === undefined && process.stdin.isTTY) return promptEmail();
+  if (!email || !email.includes('@')) {
+    throw new Error('Non-interactive init requires a valid --email.');
+  }
+  return email;
 }
 
 async function validateCredentials(config: JiraConfig, apiToken: string): Promise<void> {
@@ -255,18 +278,15 @@ function normalizeProjectKey(input: string): string {
 }
 
 export async function runInit(opts: InitOptions = {}): Promise<void> {
-  if (isNonInteractive(opts)) {
-    await runInitNonInteractive(opts);
+  if (hasSetupFlags(opts)) {
+    await runInitFromFlags(opts);
     return;
   }
   await runInitInteractive();
 }
 
-async function runInitNonInteractive(opts: InitOptions): Promise<void> {
-  const email = opts.email;
-  if (!email || !email.includes('@')) {
-    throw new Error('Non-interactive init requires a valid --email.');
-  }
+async function runInitFromFlags(opts: InitOptions): Promise<void> {
+  const email = await resolveEmail(opts.email);
 
   const domainLabel = domainLabelFromEmail(email);
   const orgName = opts.org ?? domainLabel;
@@ -282,7 +302,7 @@ async function runInitNonInteractive(opts: InitOptions): Promise<void> {
   }
 
   const projectKey = opts.project ? normalizeProjectKey(opts.project) : undefined;
-  const apiToken = readTokenFromStdinOrEnv(opts);
+  const apiToken = await resolveToken(opts);
 
   await validateCredentials({ baseUrl, userEmail: email }, apiToken);
 
