@@ -87,6 +87,20 @@ describe('requestWithRedirectPolicy — refusals', () => {
     ).rejects.toThrow(/Refused to follow redirect/);
   });
 
+  it('refuses a redirect to another port on the private host the caller asked for', async () => {
+    stubFetchSequence([{ status: 302, location: 'http://10.0.0.5:6379/' }]);
+    await expect(
+      requestWithRedirectPolicy('http://10.0.0.5/jira/rest/api/3/myself')
+    ).rejects.toThrow(/Refused to follow redirect/);
+  });
+
+  it('refuses an https redirect to another port on the private host the caller asked for', async () => {
+    stubFetchSequence([{ status: 302, location: 'https://10.0.0.5:8443/internal' }]);
+    await expect(
+      requestWithRedirectPolicy('https://10.0.0.5/jira/rest/api/3/myself')
+    ).rejects.toThrow(/private or loopback address/);
+  });
+
   it('refuses a 302 to a disallowed external host', async () => {
     stubFetchSequence([{ status: 302, location: 'https://evil.example.com/collect' }]);
     await expect(

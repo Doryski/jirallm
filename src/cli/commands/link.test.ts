@@ -299,6 +299,24 @@ describe('runLinkRemove', () => {
     expect(removeIssueLinkMock).not.toHaveBeenCalled();
     expect(logs.join('\n')).toContain('Dry run — would remove link 10042');
   });
+
+  it.each([
+    ['a traversal into another resource', '../issue/PROJ-9?deleteSubtasks=true'],
+    ['a query string', '10042?x=1'],
+    ['an encoded slash', '10042%2F..'],
+    ['a non-numeric id', 'abc'],
+  ])('rejects %s as a link id without any Jira call, dry run included', async (_label, linkId) => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    for (const dryRun of [false, true]) {
+      await expect(runLinkRemove({ linkId, org: 'acme', dryRun })).rejects.toThrow(
+        `Invalid link id "${linkId}". Expected a numeric id`
+      );
+    }
+    expect(removeIssueLinkMock).not.toHaveBeenCalled();
+    expect(fetchIssueDetailsMock).not.toHaveBeenCalled();
+    expect(logs).toEqual([]);
+    expect(writes).toEqual([]);
+  });
 });
 
 describe('runLink human-readable output', () => {

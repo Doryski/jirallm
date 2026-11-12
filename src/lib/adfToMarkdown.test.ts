@@ -144,3 +144,87 @@ describe('convertADFToMarkdown malformed nodes', () => {
     expect(out).toBe('![image](attachments/first.png)\n\n![image](attachments/second.png)\n');
   });
 });
+
+describe('convertADFToMarkdown code blocks and headings', () => {
+  const codeBlock = (body: string, language?: unknown) => ({
+    type: 'codeBlock',
+    attrs: language === undefined ? {} : { language },
+    content: [text(body)],
+  });
+
+  it('lengthens the fence past the longest backtick run in the body', () => {
+    const out = convertADFToMarkdown(doc(codeBlock('a\n```\n## Injected\n`````x')));
+    expect(out).toBe('``````\na\n```\n## Injected\n`````x\n``````');
+  });
+
+  it('keeps a three-backtick fence for bodies without long runs', () => {
+    expect(convertADFToMarkdown(doc(codeBlock('use `x` here', 'js')))).toBe(
+      '```js\nuse `x` here\n```'
+    );
+  });
+
+  it('drops a language attribute containing a newline or unsafe characters', () => {
+    expect(convertADFToMarkdown(doc(codeBlock('x', 'ts\n## Injected')))).toBe('```\nx\n```');
+    expect(convertADFToMarkdown(doc(codeBlock('x', 'a b')))).toBe('```\nx\n```');
+    expect(convertADFToMarkdown(doc(codeBlock('x', 'a'.repeat(33))))).toBe('```\nx\n```');
+    expect(convertADFToMarkdown(doc(codeBlock('x', 42)))).toBe('```\nx\n```');
+  });
+
+  it('keeps safe language tokens', () => {
+    expect(convertADFToMarkdown(doc(codeBlock('x', 'c++')))).toBe('```c++\nx\n```');
+    expect(convertADFToMarkdown(doc(codeBlock('x', 'objective-c.v2_#')))).toBe(
+      '```objective-c.v2_#\nx\n```'
+    );
+  });
+
+  it('clamps heading levels to 1-6', () => {
+    const heading = (level: unknown) => ({
+      type: 'heading',
+      attrs: { level },
+      content: [text('T')],
+    });
+    expect(convertADFToMarkdown(doc(heading(99)))).toBe('###### T');
+    expect(convertADFToMarkdown(doc(heading(0)))).toBe('# T');
+    expect(convertADFToMarkdown(doc(heading(-3)))).toBe('# T');
+    expect(convertADFToMarkdown(doc(heading('3')))).toBe('# T');
+    expect(convertADFToMarkdown(doc(heading(2.7)))).toBe('## T');
+  });
+});
+
+describe('convertADFToMarkdown attachment links', () => {
+  const media = (attrs: Record<string, unknown>) => paragraph({ type: 'media', attrs });
+
+  it('sanitizes an unmatched alt before using it as an attachment path', () => {
+    const out = convertADFToMarkdown(doc(media({ alt: '../../.ssh/id_rsa', id: 'm1' })));
+    expect(out).toBe('[id_rsa](attachments/id_rsa)\n');
+  });
+
+  it('links matched attachments by their sanitized on-disk name', () => {
+    const out = convertADFToMarkdown(doc(media({ alt: '../evil.png' })), [
+      { id: '1', filename: '../evil.png' },
+    ]);
+    expect(out).toBe('![image](attachments/evil.png)\n');
+  });
+
+  it('links duplicate filenames to the deduplicated names used on disk', () => {
+    const out = convertADFToMarkdown(doc(media({}), media({})), [
+      { id: '1', filename: 'shot.png' },
+      { id: '2', filename: 'Shot.png' },
+    ]);
+    expect(out).toBe('![image](attachments/shot.png)\n\n![image](attachments/Shot-1.png)\n');
+  });
+
+  it('uses sanitized names for card links matched by attachment id', () => {
+    const out = convertADFToMarkdown(
+      doc(paragraph({ type: 'inlineCard', attrs: { url: 'https://x/attachment/55' } })),
+      [{ id: '55', filename: 'a/..\\report<1>.pdf', url: 'https://x/attachment/55' }]
+    );
+    expect(out).toBe('[report_1_.pdf](attachments/report_1_.pdf)\n');
+  });
+
+  it('strips path characters from embedded media ids', () => {
+    expect(convertADFToMarkdown(doc(media({ id: '../../x' })))).toBe(
+      '![embedded media](media/x)\n'
+    );
+  });
+});

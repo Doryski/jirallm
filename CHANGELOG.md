@@ -6,6 +6,68 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Removed
+
+- **Breaking:** the export flag `--api-token <token>` is gone — a token in argv is visible in `ps`,
+  shell history and agent transcripts. Passing it now fails with a pointer to its replacement,
+  `--token-stdin`.
+
+### Added
+
+- `--token-stdin` on export (`jirallm <keys>` / `jirallm export`) reads the API token from piped
+  stdin, e.g. `pbpaste | jirallm PROJ-123 --token-stdin`.
+- `JiraConfig.allowInsecureHttp` and the `JIRALLM_ALLOW_INSECURE_HTTP=1` environment variable opt in
+  to a plain-`http://` base URL on a non-loopback host.
+
+### Security
+
+- `--base-url` no longer pairs a stored token with another host: when it is not same-origin with
+  the org's configured `base_url`, the export is refused unless the token is piped with
+  `--token-stdin`.
+- Base URLs must be `https://` with no embedded credentials, query string or fragment — in
+  `config.toml`, `init` (flags and wizard), `--base-url` and the `JiraClient` constructor. Plain
+  `http://` is accepted only for `localhost` / `127.0.0.1` / `[::1]` or with the opt-in above.
+  **An existing config with an `http://` `base_url` stops loading until it is changed or the opt-in
+  is set.**
+- `JiraClient.downloadAttachment` refuses any URL that is not same-origin with `baseUrl`, so the
+  token is never sent to a host named in a Jira response. If Jira reports attachment URLs on a
+  different host or port than the configured `base_url` (a Data Center reached through an alias of
+  its Base URL, or a gateway base URL), exports of issues with attachments now fail with a
+  "not the configured Jira origin" error until `base_url` matches the host Jira reports.
+- A redirect to a different port on the Jira host is no longer treated as "the host the caller
+  asked for": it now has to pass the same https / private-address / allowlist checks as any other
+  redirect target.
+- Every id or key placed in a request path is percent-encoded as a single segment, and `''`, `.`
+  and `..` are rejected, so a value such as `../issue/PROJ-9?deleteSubtasks=true` can no longer
+  reach a different endpoint. `link:rm`, `comment:rm`, `comment:edit`, `comment --reply-to` and
+  `attach:rm` additionally reject non-numeric ids up front, dry run included.
+- Attachment filenames from Jira are reduced to a safe single path segment and de-duplicated
+  case-insensitively; the on-disk name and its link in `task.md` can therefore differ from the name
+  in Jira. Issue keys returned by the server are re-validated before they become folder names.
+- Export refuses to write through symlinks found inside the output directory (issue folder,
+  `task.md`, `attachments/`, attachments, frames folders). `task.md` and attachments are written via
+  a temp file and renamed into place, so an interrupted download no longer leaves a truncated file
+  that later runs skip.
+- `task.md` marks Jira-authored free text as data: a notice with a random per-issue nonce follows
+  the frontmatter, and the description, each history entry's body and each worklog comment are
+  wrapped in `<<<jira-data NONCE>>>` / `<<<end-jira-data NONCE>>>` lines. Author names, titles and
+  field names in tool-written header lines are collapsed to a single line, and frontmatter strings
+  escape newlines and control characters.
+- Code blocks converted from ADF use a fence longer than any backtick run in their body, the
+  `language` attribute is limited to a safe token, and heading levels are clamped to 1–6.
+- `--fps` must be a whole number from 1 to 30 and `--max-frames` from 1 to 200. Values of
+  `video_frames.fps` / `video_frames.max_frames` already saved in config are rounded and clamped
+  into the same ranges instead of being rejected, so an older config keeps loading.
+- Frame extraction is skipped, with a warning, for videos longer than 30 minutes or with an
+  unreadable duration (the video file is still exported), and stale `frame-*` / `raw-*` files in
+  a video's frames folder are removed before extraction. The check relies on the duration the file
+  declares; hard caps inside ffmpeg arrive with the next `framewise` release. `JiraExporter` accepts `videoFrames.maxDurationSeconds` to change the cap.
+- `init` validates the email address properly before deriving a default base URL from it.
+
+### Changed
+
+- `zod` is bumped to `^4.6.7`.
+
 ## [0.15.0] - 2026-10-20
 
 ### Added

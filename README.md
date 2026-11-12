@@ -19,7 +19,7 @@ It exists because every team that uses Jira + LLMs ends up writing the same brit
 - Renders Jira ADF descriptions and comments to clean Markdown
 - Downloads all attachments with original filenames (auth handled)
 - Extracts frames from attached videos via `ffmpeg` and deduplicates near-identical frames using `pixelmatch`
-- Produces an `index.md` summary per issue, ready to paste into an LLM context window
+- Produces a `task.md` summary per issue, ready to paste into an LLM context window
 - Works as a CLI (`jirallm`) and as a programmatic library
 - TypeScript-first, ESM, zero hidden globals
 
@@ -124,6 +124,14 @@ jirallm auth rm  --org acme         # remove stored token
 
 CLI flags (`--base-url`, `--output-dir`, `--fps`, …) override whatever the resolved config produces.
 
+`--base-url` never reuses a stored token for a different host: when it points somewhere other than the org's configured `base_url`, pipe the token for that host explicitly.
+
+```bash
+pbpaste | jirallm PROJ-7 --base-url https://other.atlassian.net --user-email me@other.example --token-stdin
+```
+
+Base URLs must be `https://` everywhere (config, `init`, `--base-url`, and `new JiraClient(...)`), with no embedded credentials, query string or fragment. Plain `http://` is accepted only for `localhost` / `127.0.0.1` / `[::1]`, or for any host when `JIRALLM_ALLOW_INSECURE_HTTP=1` is set (library: `allowInsecureHttp: true` on `JiraConfig`) — the API token then travels unencrypted.
+
 ### Export field selection
 
 The frontmatter fields written by `jirallm <key>` / `jirallm export` default to the `default` preset. An org can pin its own base set, and declare the custom fields it cares about:
@@ -210,16 +218,26 @@ Each issue lands in its own folder:
 
 ```
 jira-export/
-  PROJ-123/
-    index.md            # summary + description + comments
+  .gitignore             # ignores everything, so exports never get committed
+  proj-123/
+    task.md              # frontmatter + description + history
     attachments/
       design.pdf
       screen-recording.mp4
-    frames/
-      screen-recording/
+      screen-recording.mp4-frames/
         frame-0001.jpg
-        frame-0042.jpg   # only meaningfully different frames are kept
+        frame-0002.jpg   # only meaningfully different frames are kept
 ```
+
+### Untrusted content in the bundle
+
+Everything a Jira user can type or upload is treated as untrusted, because the bundle is usually read by an LLM agent:
+
+- **Free text is fenced off.** Each exported `task.md` starts (after the frontmatter) with a one-line notice carrying a random per-issue nonce. The description, every comment / change body and every worklog comment sit between `<<<jira-data NONCE>>>` and `<<<end-jira-data NONCE>>>` lines. Text between those lines is data, not instructions; a marker line with any other nonce was typed by a Jira user. The structure outside the markers — section headings, `---` separators, `[COMMENT] … — date:` lines — is written by `jirallm`, but it still carries short Jira-authored values: the issue title, author names, field names and the frontmatter values. Those are collapsed to a single line (frontmatter strings are escaped), so they cannot start a line of their own, yet they remain user-supplied text and should be read as such. Link targets inside the markers are passed through as written in Jira, including non-`http` schemes.
+- **Attachment names are sanitized.** Path separators, control characters, Windows-reserved names and characters, and `%` are removed, names are de-duplicated case-insensitively, and nothing is written outside the issue's `attachments/` folder — so the on-disk name (and the link in `task.md`) can differ from the name shown in Jira.
+- **Symlinks inside the output directory are refused.** If the issue folder, `task.md`, `attachments/`, an attachment or a frames folder already exists as a symlink, that issue's export fails instead of writing through it. The output directory itself may be a symlink.
+- **Attachments are only downloaded from the configured Jira origin**, and land via a temp file, so an interrupted download never leaves a truncated attachment behind.
+- **Long videos keep their file but get no frames.** Frame extraction is skipped (with a warning) for videos longer than 30 minutes or whose duration cannot be read — some browser-recorded `.webm` files fall in the second group. Before each extraction the previous `frame-*` / `raw-*` files in that video's frames folder are removed; anything else you put there is left alone. The duration check reads what the file declares, so it stops honest long recordings, not a deliberately mislabelled file.
 
 ### Programmatic
 
@@ -249,7 +267,7 @@ Bundle a few issues and pipe the resulting summary into your LLM of choice:
 
 ```bash
 jirallm PROJ-123 PROJ-124 --output-dir ./triage-bundle
-cat ./triage-bundle/PROJ-123/index.md | pbcopy
+cat ./triage-bundle/proj-123/task.md | pbcopy
 ```
 
 ## For agents (CLI commands)

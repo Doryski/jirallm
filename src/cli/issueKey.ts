@@ -6,6 +6,16 @@ export type ParsedIssueKey = {
 
 const ISSUE_KEY_RE = /^([A-Z][A-Z0-9_]*)-\d+$/;
 const ORG_PART_RE = /^[a-zA-Z0-9_.-]+$/;
+const NUMERIC_ID_RE = /^\d+$/;
+
+export function isNumericId(value: string): boolean {
+  return NUMERIC_ID_RE.test(value);
+}
+
+export function parseNumericId(value: string, label: string): string {
+  if (isNumericId(value)) return value;
+  throw new Error(`Invalid ${label} "${value}". Expected a numeric id (digits only, e.g. 10042).`);
+}
 
 export function parseIssueKey(input: string): ParsedIssueKey {
   const slashIdx = input.indexOf('/');
@@ -26,6 +36,15 @@ export function parseIssueKey(input: string): ParsedIssueKey {
     );
   }
   return { org, key: upperRest, projectKey: match[1] };
+}
+
+export function isIssueKey(input: string): boolean {
+  try {
+    parseIssueKey(input);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export type ResolvedKeys = {

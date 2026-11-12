@@ -997,8 +997,11 @@ describe('JiraClient.downloadAttachment', () => {
     );
     const out = join(tmpDir, 'nested', 'out.bin');
     const client = new JiraClient(FAKE_CONFIG, 'token');
-    await client.downloadAttachment('https://x/attachment/content/1', out);
-    expect(urls[0]).toBe('https://x/attachment/content/1');
+    await client.downloadAttachment(
+      'https://example.atlassian.net/rest/api/3/attachment/content/1',
+      out
+    );
+    expect(urls[0]).toBe('https://example.atlassian.net/rest/api/3/attachment/content/1');
     const written = await readFile(out, 'utf8');
     expect(written).toBe('file-contents');
   });
@@ -1012,7 +1015,7 @@ describe('JiraClient.downloadAttachment', () => {
     );
     const client = new JiraClient(FAKE_CONFIG, 'token');
     await expect(
-      client.downloadAttachment('https://x/1', join(tmpDir, 'a.bin'))
+      client.downloadAttachment('https://example.atlassian.net/1', join(tmpDir, 'a.bin'))
     ).rejects.toThrow(/Failed to download attachment: 404 Not Found/);
   });
 
@@ -1025,7 +1028,7 @@ describe('JiraClient.downloadAttachment', () => {
     );
     const client = new JiraClient(FAKE_CONFIG, 'token');
     await expect(
-      client.downloadAttachment('https://x/1', join(tmpDir, 'b.bin'))
+      client.downloadAttachment('https://example.atlassian.net/1', join(tmpDir, 'b.bin'))
     ).rejects.toThrow(/Response body is null/);
   });
 });

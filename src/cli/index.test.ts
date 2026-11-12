@@ -42,6 +42,8 @@ const exportIssuesMock = vi.fn();
 const listOrgsMock = vi.fn();
 const loadProfileMock = vi.fn();
 const resolveOrgInteractiveMock = vi.fn();
+const readTokenFromStdinMock = vi.fn();
+const exporterArgs: Array<{ config: unknown; token: unknown }> = [];
 
 vi.mock('./commands/init.js', () => ({ runInit: (...a: unknown[]) => runInitMock(...a) }));
 vi.mock('./commands/auth.js', () => ({
@@ -93,7 +95,13 @@ vi.mock('./commands/upgrade.js', () => ({ runUpgrade: (...a: unknown[]) => runUp
 vi.mock('../lib/exporter.js', () => ({
   JiraExporter: class {
     exportIssues = exportIssuesMock;
+    constructor(config: unknown, token: unknown) {
+      exporterArgs.push({ config, token });
+    }
   },
+}));
+vi.mock('./stdin.js', () => ({
+  readTokenFromStdin: (...a: unknown[]) => readTokenFromStdinMock(...a),
 }));
 vi.mock('../lib/config.js', async () => {
   const actual = await vi.importActual<typeof import('../lib/config.js')>('../lib/config.js');
@@ -125,6 +133,7 @@ const originalArgv = process.argv;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  exporterArgs.length = 0;
   logs = [];
   errs = [];
   warns = [];
@@ -800,10 +809,11 @@ describe('export --fields validation (issue #23)', () => {
 
   it('rejects an unrecognised --fields name even when credentials come from flags', async () => {
     mockProfile({});
+    readTokenFromStdinMock.mockReturnValue('tok');
     await expect(
       run([
         'PROJ-123', '--fields', '+issuelinkz', '--dry-run',
-        '--base-url', 'https://x', '--user-email', 'u@x', '--api-token', 'tok',
+        '--base-url', 'https://x', '--user-email', 'u@x', '--token-stdin',
       ])
     ).rejects.toThrow('exit:1');
     expect(errs.join('\n')).toContain('issuelinkz');
@@ -862,5 +872,155 @@ describe('export --fields validation (issue #23)', () => {
     mockProfile({ export: { fieldSelector: { preset: 'minimal' } } });
     await run(['PROJ-123', '--fields', 'key,status', '--dry-run']);
     expect(frontmatterFields()).toEqual(['key', 'status']);
+  });
+});
+
+describe('export credentials and host overrides', () => {
+  const CONFIGURED_URL = 'https://acme.atlassian.net';
+
+  const mockProfile = () => {
+    listOrgsMock.mockReturnValue(['acme']);
+    resolveOrgInteractiveMock.mockResolvedValue('acme');
+    loadProfileMock.mockResolvedValue({
+      config: { baseUrl: CONFIGURED_URL, userEmail: 'u@acme.com' },
+      org: {},
+      project: { key: 'PROJ' },
+      apiToken: 'keychain-token',
+    });
+    exportIssuesMock.mockResolvedValue({ imported: [], updated: [], failed: [] });
+  };
+
+  it('rejects the removed --api-token flag with a pointer to --token-stdin, without echoing the token', async () => {
+    mockProfile();
+    await expect(run(['PROJ-123', '--api-token', 's3cret'])).rejects.toThrow('exit:1');
+    const output = errs.join('\n');
+    expect(output).toContain('--api-token was removed');
+    expect(output).toContain('--token-stdin');
+    expect(output).not.toContain('s3cret');
+    expect(loadProfileMock).not.toHaveBeenCalled();
+    expect(exportIssuesMock).not.toHaveBeenCalled();
+  });
+
+  it('does not list --api-token in the help output', () => {
+    expect(buildProgram().helpInformation()).not.toContain('--api-token');
+    expect(buildProgram().helpInformation()).toContain('--token-stdin');
+  });
+
+  it('refuses a --base-url on another host than the org config when the token is the stored one', async () => {
+    mockProfile();
+    await expect(run(['PROJ-123', '--base-url', 'https://attacker.example'])).rejects.toThrow('exit:1');
+    expect(errs.join('\n')).toContain('does not match the base URL configured for org "acme"');
+    expect(exporterArgs).toEqual([]);
+    expect(exportIssuesMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses a mismatched --base-url during a dry run too', async () => {
+    mockProfile();
+    await expect(
+      run(['PROJ-123', '--base-url', 'https://attacker.example', '--dry-run'])
+    ).rejects.toThrow('exit:1');
+    expect(logs.join('\n')).not.toContain('Dry run');
+  });
+
+  it('allows a --base-url on another host when the token comes from --token-stdin', async () => {
+    mockProfile();
+    readTokenFromStdinMock.mockReturnValue('piped-token');
+    await run(['PROJ-123', '--base-url', 'https://other.example', '--token-stdin']);
+    expect(exporterArgs).toEqual([
+      {
+        config: { baseUrl: 'https://other.example', projectKey: 'PROJ', userEmail: 'u@acme.com' },
+        token: 'piped-token',
+      },
+    ]);
+  });
+
+  it('allows a --base-url with the same origin as the org config', async () => {
+    mockProfile();
+    await run(['PROJ-123', '--base-url', `${CONFIGURED_URL}/`]);
+    expect(exporterArgs[0]).toMatchObject({ token: 'keychain-token' });
+  });
+
+  it('skips the profile entirely when base URL, email and a piped token are all explicit', async () => {
+    mockProfile();
+    readTokenFromStdinMock.mockReturnValue('piped-token');
+    await run([
+      'PROJ-123', '--base-url', 'https://other.example', '--user-email', 'me@other.example', '--token-stdin',
+    ]);
+    expect(loadProfileMock).not.toHaveBeenCalled();
+    expect(exporterArgs[0]).toMatchObject({ token: 'piped-token' });
+  });
+
+  it('uses the stored token and never reads stdin without --token-stdin', async () => {
+    mockProfile();
+    await run(['PROJ-123']);
+    expect(readTokenFromStdinMock).not.toHaveBeenCalled();
+    expect(exporterArgs[0]).toMatchObject({ token: 'keychain-token' });
+  });
+
+  it('reports a --token-stdin read failure and exports nothing', async () => {
+    mockProfile();
+    readTokenFromStdinMock.mockImplementation(() => {
+      throw new Error('--token-stdin was set but no token was received on stdin.');
+    });
+    await expect(run(['PROJ-123', '--token-stdin'])).rejects.toThrow('exit:1');
+    expect(errs.join('\n')).toContain('no token was received on stdin');
+    expect(exportIssuesMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['plain http', 'http://acme.atlassian.net'],
+    ['embedded credentials', 'https://user:pw@acme.atlassian.net'],
+    ['a non-http scheme', 'file:///etc/passwd'],
+  ])('rejects a --base-url with %s before loading the profile', async (_label, url) => {
+    mockProfile();
+    await expect(run(['PROJ-123', '--base-url', url])).rejects.toThrow('exit:1');
+    expect(errs.join('\n')).toContain('Invalid Jira base URL');
+    expect(loadProfileMock).not.toHaveBeenCalled();
+    expect(exportIssuesMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('export video-frame bounds', () => {
+  const mockProfile = () => {
+    listOrgsMock.mockReturnValue(['acme']);
+    resolveOrgInteractiveMock.mockResolvedValue('acme');
+    loadProfileMock.mockResolvedValue({
+      config: { baseUrl: 'https://acme.atlassian.net', userEmail: 'u@acme.com' },
+      org: {},
+      project: { key: 'PROJ' },
+      apiToken: 'tok',
+    });
+  };
+
+  beforeEach(() => {
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  });
+
+  it.each([
+    ['--fps', '0'],
+    ['--fps', '31'],
+    ['--fps', '-2'],
+    ['--fps', 'abc'],
+    ['--fps', '2.5'],
+    ['--max-frames', '0'],
+    ['--max-frames', '201'],
+    ['--max-frames', '99999999'],
+  ])('rejects %s %s', async (flag, value) => {
+    mockProfile();
+    await expect(run(['PROJ-123', flag, value, '--dry-run'])).rejects.toThrow(/whole number from 1 to/);
+    expect(loadProfileMock).not.toHaveBeenCalled();
+    expect(exportIssuesMock).not.toHaveBeenCalled();
+  });
+
+  it('accepts in-range values and reports them in the dry-run plan', async () => {
+    mockProfile();
+    await run(['PROJ-123', '--fps', '30', '--max-frames', '200', '--dry-run']);
+    expect(logs.join('\n')).toContain('enabled (fps=30, maxFrames=200)');
+  });
+
+  it('keeps the defaults when the flags are absent', async () => {
+    mockProfile();
+    await run(['PROJ-123', '--dry-run']);
+    expect(logs.join('\n')).toContain('enabled (fps=5, maxFrames=10)');
   });
 });

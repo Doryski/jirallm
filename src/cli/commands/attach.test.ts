@@ -277,4 +277,18 @@ describe('runAttachRemove', () => {
       attachment: { id: '200', filename: 'report.pdf', size: 2048, mimeType: 'application/pdf' },
     });
   });
+
+  it.each([['../issue/PROJ-9?x=1'], ['acme/99021?x=1'], ['acme/../99021'], ['99021%2F..']])(
+    'rejects a traversal-shaped attachment id %j without any Jira call, dry run included',
+    async (target) => {
+      for (const dryRun of [false, true]) {
+        await expect(runAttachRemove({ target, org: 'acme', dryRun })).rejects.toThrow(
+          `Invalid attachment id "${target}". Expected a numeric id`
+        );
+      }
+      expect(getAttachmentMetaMock).not.toHaveBeenCalled();
+      expect(fetchIssueDetailsMock).not.toHaveBeenCalled();
+      expect(deleteAttachmentMock).not.toHaveBeenCalled();
+    }
+  );
 });

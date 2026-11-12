@@ -1,7 +1,7 @@
 import { stat } from 'fs/promises';
 import { loadOrgProfile, loadProfile } from '../../lib/config.js';
 import { JiraClient, type UploadedAttachment } from '../../lib/jiraClient.js';
-import { parseIssueKey } from '../issueKey.js';
+import { isIssueKey, isNumericId, parseIssueKey } from '../issueKey.js';
 import { resolveOrg } from '../resolveOrg.js';
 import { printJson, shouldOutputJson } from '../jsonOutput.js';
 
@@ -69,8 +69,6 @@ export type AttachRemoveOptions = {
 };
 
 type AttachmentMeta = Awaited<ReturnType<JiraClient['getAttachmentMeta']>>;
-
-const NUMERIC_ID_RE = /^\d+$/;
 
 function splitOrgPrefix(target: string): { org?: string; rest: string } {
   const idx = target.indexOf('/');
@@ -180,6 +178,12 @@ async function requireFilenameForKey(target: string, opts: AttachRemoveOptions):
   );
 }
 
+function invalidAttachmentTargetError(target: string): Error {
+  return new Error(
+    `Invalid attachment id "${target}". Expected a numeric id (digits only, e.g. 99021), optionally as org/99021, or an issue key followed by a filename.`
+  );
+}
+
 export async function runAttachRemove(opts: AttachRemoveOptions): Promise<void> {
   if (!opts.target) throw new Error('Provide an attachment id, or an issue key and filename.');
 
@@ -189,10 +193,11 @@ export async function runAttachRemove(opts: AttachRemoveOptions): Promise<void> 
   }
 
   const { org: prefixOrg, rest } = splitOrgPrefix(opts.target);
-  if (NUMERIC_ID_RE.test(rest)) {
+  if (isNumericId(rest)) {
     await removeById(rest, opts.org ?? prefixOrg, opts);
     return;
   }
 
+  if (!isIssueKey(opts.target)) throw invalidAttachmentTargetError(opts.target);
   await requireFilenameForKey(opts.target, opts);
 }

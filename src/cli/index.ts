@@ -56,6 +56,9 @@ import {
   resolveFieldSet,
 } from '../lib/exportFields.js';
 import type { CustomFieldDefs, FieldSelector } from '../lib/exportFields.js';
+import { assertSecureBaseUrl, isSameOrigin } from '../lib/baseUrl.js';
+import { VIDEO_FRAME_LIMITS, integerInRangeProblem, type IntegerRange } from '../lib/configSchema.js';
+import { readTokenFromStdin } from './stdin.js';
 
 type ExportFlags = {
   org?: string;
@@ -64,9 +67,10 @@ type ExportFlags = {
   baseUrl?: string;
   userEmail?: string;
   apiToken?: string;
+  tokenStdin?: boolean;
   videoFrames: boolean;
-  fps?: string;
-  maxFrames?: string;
+  fps?: number;
+  maxFrames?: number;
   includeSubtasks?: boolean;
   includeParent?: boolean;
   fields?: string;
@@ -138,7 +142,43 @@ function reportUnknownFieldNames(
   process.exit(1);
 }
 
+const DEFAULT_EXPORT_FPS = 5;
+const DEFAULT_EXPORT_MAX_FRAMES = 10;
+const EXPORT_TOKEN_EXAMPLE = '`pbpaste | jirallm PROJ-123 --token-stdin`';
+const API_TOKEN_REMOVED_MESSAGE = `--api-token was removed: a token on the command line leaks into shell history and process listings. Pipe it instead with --token-stdin, e.g. ${EXPORT_TOKEN_EXAMPLE}.`;
+
+function integerInRange(range: IntegerRange) {
+  return (raw: string): number => {
+    const problem = integerInRangeProblem(raw, range);
+    if (problem) throw new InvalidArgumentError(`${problem}.`);
+    return Number(raw.trim());
+  };
+}
+
+function readExplicitToken(flags: ExportFlags): string | undefined {
+  if (!flags.tokenStdin) return undefined;
+  return readTokenFromStdin({ example: EXPORT_TOKEN_EXAMPLE, fallback: 'use the stored token' });
+}
+
+function assertBaseUrlOverrideAllowed(
+  override: string | undefined,
+  configured: string,
+  org: string | undefined,
+  tokenFromStdin: boolean
+): void {
+  if (!override || tokenFromStdin || isSameOrigin(override, configured)) return;
+  throw new Error(
+    `--base-url ${override} does not match the base URL configured for org "${org}" (${configured}). ` +
+      'Refusing to send the stored API token to a different host — pipe a token for that host with --token-stdin, or drop --base-url.'
+  );
+}
+
 async function runExport(rawArgs: string[], flags: ExportFlags, program: Command): Promise<void> {
+  if (flags.apiToken !== undefined) {
+    console.error(API_TOKEN_REMOVED_MESSAGE);
+    process.exit(1);
+  }
+
   if (rawArgs.length === 0) {
     if (listOrgs().length > 0) {
       program.outputHelp();
@@ -151,13 +191,12 @@ async function runExport(rawArgs: string[], flags: ExportFlags, program: Command
   let baseUrl = flags.baseUrl;
   let userEmail = flags.userEmail;
   let projectKey = flags.project;
-  let apiToken = flags.apiToken;
   let outputDir = flags.outputDir ?? './jira-export';
   let includeSubtasks = flags.includeSubtasks ?? false;
   const includeParent = flags.includeParent ?? false;
   let videoEnabled = flags.videoFrames;
-  let fps = flags.fps ? parseInt(flags.fps, 10) : 5;
-  let maxFrames = flags.maxFrames ? parseInt(flags.maxFrames, 10) : 10;
+  let fps = flags.fps ?? DEFAULT_EXPORT_FPS;
+  let maxFrames = flags.maxFrames ?? DEFAULT_EXPORT_MAX_FRAMES;
   const flagSelector = flags.fields ? parseFieldsFlag(flags.fields) : undefined;
   let fieldSelector = flagSelector;
   let customFieldDefs: CustomFieldDefs | undefined;
@@ -175,9 +214,19 @@ async function runExport(rawArgs: string[], flags: ExportFlags, program: Command
     process.exit(1);
   }
 
+  let apiToken: string | undefined;
+  try {
+    if (baseUrl !== undefined) assertSecureBaseUrl(baseUrl);
+    apiToken = readExplicitToken(flags);
+  } catch (err) {
+    exitOnError(err);
+  }
+  const tokenFromStdin = apiToken !== undefined;
+
   if (!(baseUrl && userEmail && apiToken)) {
     try {
       const resolved = await loadProfile({ org, project: projectKey });
+      assertBaseUrlOverrideAllowed(baseUrl, resolved.config.baseUrl, org, tokenFromStdin);
       baseUrl = baseUrl ?? resolved.config.baseUrl;
       userEmail = userEmail ?? resolved.config.userEmail;
       projectKey = projectKey ?? resolved.project.key;
@@ -204,10 +253,10 @@ async function runExport(rawArgs: string[], flags: ExportFlags, program: Command
         if (resolved.org.videoFrames.enabled === false && flags.videoFrames !== false) {
           videoEnabled = false;
         }
-        if (!flags.fps && resolved.org.videoFrames.fps !== undefined) {
+        if (flags.fps === undefined && resolved.org.videoFrames.fps !== undefined) {
           fps = resolved.org.videoFrames.fps;
         }
-        if (!flags.maxFrames && resolved.org.videoFrames.maxFrames !== undefined) {
+        if (flags.maxFrames === undefined && resolved.org.videoFrames.maxFrames !== undefined) {
           maxFrames = resolved.org.videoFrames.maxFrames;
         }
       }
@@ -320,12 +369,27 @@ function addExportOptions(cmd: Command): Command {
     .option('-o, --org <name>', 'Organization name from config (auto-resolved from issue prefix if unique)')
     .option('-P, --project <key>', 'Project key override')
     .option('--output-dir <path>', 'Output directory (default: ./jira-export)')
-    .option('--base-url <url>', 'Jira base URL (overrides config)')
+    .option(
+      '--base-url <url>',
+      "Jira base URL (overrides config; https only). A host other than the org's configured one requires --token-stdin"
+    )
     .option('--user-email <email>', 'Jira user email (overrides config)')
-    .option('--api-token <token>', 'Jira API token (overrides keychain)')
+    .option(
+      '--token-stdin',
+      'Read the API token from piped stdin instead of the keychain — a switch that takes no value (e.g. `pbpaste | jirallm PROJ-123 --token-stdin`)'
+    )
+    .addOption(new Option('--api-token <token>').hideHelp())
     .option('--no-video-frames', 'Disable video frame extraction')
-    .option('--fps <n>', 'Frame extraction FPS')
-    .option('--max-frames <n>', 'Max frames kept per video')
+    .option(
+      '--fps <n>',
+      `Frame extraction FPS (${VIDEO_FRAME_LIMITS.fps.min}-${VIDEO_FRAME_LIMITS.fps.max}, default ${DEFAULT_EXPORT_FPS})`,
+      integerInRange(VIDEO_FRAME_LIMITS.fps)
+    )
+    .option(
+      '--max-frames <n>',
+      `Max frames kept per video (${VIDEO_FRAME_LIMITS.maxFrames.min}-${VIDEO_FRAME_LIMITS.maxFrames.max}, default ${DEFAULT_EXPORT_MAX_FRAMES})`,
+      integerInRange(VIDEO_FRAME_LIMITS.maxFrames)
+    )
     .option('--include-subtasks', 'Fetch subtask metadata (may already be enabled via org config).')
     .option(
       '--include-parent',
@@ -362,6 +426,7 @@ Examples:
   $ jirallm PROJ-123 --fps 2 --max-frames 6
   $ jirallm PROJ-123 --include-subtasks
   $ jirallm PROJ-123 --include-parent
+  $ pbpaste | jirallm PROJ-123 --token-stdin
   $ jirallm export PROJ-123
   $ jirallm fetch PROJ-123 --with-comments --with-history
   $ jirallm fetch PROJ-123 --full

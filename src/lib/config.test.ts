@@ -393,6 +393,62 @@ describe('config validation (Zod)', () => {
     expect(() => readConfig(configPath)).toThrow(/orgs\.acme/);
   });
 
+  const orgWithBaseUrl = (baseUrl: string) =>
+    `[orgs.acme]\nbase_url = "${baseUrl}"\nuser_email = "u@x.example"\n`;
+
+  it.each([
+    ['plain http', 'http://acme.atlassian.net', 'must use https://'],
+    ['a file: URL', 'file:///etc/passwd', 'must use https://'],
+    ['a javascript: URL', 'javascript:alert(1)', 'must use https://'],
+    ['embedded credentials', 'https://user:pw@acme.atlassian.net', 'must not contain credentials'],
+    ['a fragment', 'https://acme.atlassian.net/#x', 'must not contain a query string or fragment'],
+    ['a non-URL', 'acme.atlassian.net', 'is not a valid URL'],
+  ])('rejects a base_url with %s and says why', (_label, baseUrl, reason) => {
+    writeFileSync(configPath, orgWithBaseUrl(baseUrl));
+    expect(() => readConfig(configPath)).toThrow(`orgs.acme.base_url: Jira base URL ${reason}`);
+  });
+
+  it('accepts plain http for a loopback host', () => {
+    writeFileSync(configPath, orgWithBaseUrl('http://localhost:8080'));
+    expect(readConfig(configPath).orgs?.acme.base_url).toBe('http://localhost:8080');
+  });
+
+  it('accepts plain http for any host when JIRALLM_ALLOW_INSECURE_HTTP=1', () => {
+    vi.stubEnv('JIRALLM_ALLOW_INSECURE_HTTP', '1');
+    writeFileSync(configPath, orgWithBaseUrl('http://jira.internal'));
+    const parse = () => readConfig(configPath);
+    try {
+      expect(parse().orgs?.acme.base_url).toBe('http://jira.internal');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  const orgWithVideoFrames = (body: string) =>
+    `${orgWithBaseUrl('https://x.example')}[orgs.acme.video_frames]\n${body}\n`;
+
+  it.each([
+    ['fps = 0', { fps: 1 }],
+    ['fps = 60', { fps: 30 }],
+    ['fps = 0.5', { fps: 1 }],
+    ['fps = 2.5', { fps: 3 }],
+    ['max_frames = 0', { max_frames: 1 }],
+    ['max_frames = 500', { max_frames: 200 }],
+    ['max_frames = -5', { max_frames: 1 }],
+  ])('clamps out-of-range video frames setting %s instead of failing the config', (body, expected) => {
+    writeFileSync(configPath, orgWithVideoFrames(body));
+    expect(readConfig(configPath).orgs?.acme.video_frames).toEqual(expected);
+  });
+
+  it('accepts video frame settings at the bounds', () => {
+    writeFileSync(configPath, orgWithVideoFrames('fps = 30\nmax_frames = 200\nquality = 85'));
+    expect(readConfig(configPath).orgs?.acme.video_frames).toEqual({
+      fps: 30,
+      max_frames: 200,
+      quality: 85,
+    });
+  });
+
   it('accepts an empty file', () => {
     writeFileSync(configPath, '');
     expect(() => readConfig(configPath)).not.toThrow();

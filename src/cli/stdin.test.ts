@@ -7,7 +7,7 @@ vi.mock('fs', async (importOriginal) => {
   return { ...actual, readFileSync: (...args: unknown[]) => readFileSyncMock(...args) };
 });
 
-import { readPipedStdin } from './stdin.js';
+import { readPipedStdin, readTokenFromStdin } from './stdin.js';
 
 const originalIsTTY = process.stdin.isTTY;
 
@@ -46,5 +46,34 @@ describe('readPipedStdin', () => {
     readFileSyncMock.mockReturnValue('');
 
     expect(readPipedStdin('hint')).toBe('');
+  });
+});
+
+describe('readTokenFromStdin', () => {
+  const hint = { example: '`pbpaste | jirallm PROJ-1 --token-stdin`', fallback: 'use the stored token' };
+
+  it('returns the trimmed piped token', () => {
+    setStdinTTY(false);
+    readFileSyncMock.mockReturnValue('  tok-123\n');
+
+    expect(readTokenFromStdin(hint)).toBe('tok-123');
+  });
+
+  it('builds the terminal hint from the example and fallback', () => {
+    setStdinTTY(true);
+
+    expect(() => readTokenFromStdin(hint)).toThrow(
+      'stdin is a terminal — pipe the token, e.g. `pbpaste | jirallm PROJ-1 --token-stdin`, or drop --token-stdin to use the stored token.'
+    );
+    expect(readFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects an empty pipe', () => {
+    setStdinTTY(false);
+    readFileSyncMock.mockReturnValue('\n');
+
+    expect(() => readTokenFromStdin(hint)).toThrow(
+      '--token-stdin was set but no token was received on stdin.'
+    );
   });
 });

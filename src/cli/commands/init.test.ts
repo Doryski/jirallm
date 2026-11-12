@@ -232,6 +232,96 @@ describe('runInit (non-interactive)', () => {
     expect(getCurrentUserMock).not.toHaveBeenCalled();
     expect(upsertOrgMock).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ['plain http', 'http://acme.atlassian.net', 'must use https://'],
+    ['embedded credentials', 'https://me:pw@acme.atlassian.net', 'must not contain credentials'],
+    ['a query string', 'https://acme.atlassian.net/?x=1', 'must not contain a query string'],
+    ['a javascript: URL', 'javascript:alert(1)', 'must use https://'],
+  ])('rejects a --base-url with %s, naming the reason, before any token read or write', async (_label, baseUrl, reason) => {
+    await expect(runInit({ email: 'me@acme.com', baseUrl, tokenStdin: true })).rejects.toThrow(
+      `Invalid --base-url "${baseUrl}": ${reason}`
+    );
+    expect(readFileSyncMock).not.toHaveBeenCalled();
+    expect(constructed).toEqual([]);
+    expect(setTokenMock).not.toHaveBeenCalled();
+    expect(upsertOrgMock).not.toHaveBeenCalled();
+  });
+
+  it('accepts plain http for a loopback host', async () => {
+    await runInit({ org: 'local', email: 'me@acme.com', baseUrl: 'http://localhost:8080' });
+    expect(upsertOrgMock).toHaveBeenCalledWith(
+      expect.objectContaining({ baseUrl: 'http://localhost:8080' })
+    );
+  });
+
+  it.each([['me@acme'], ['me@@acme.com'], ['me@acme.com/x'], ['@acme.com'], ['me@acme_corp.com'], ['me@evil.com?x=.atlassian.net']])(
+    'rejects a malformed --email %j before deriving anything from it',
+    async (email) => {
+      await expect(runInit({ email })).rejects.toThrow('Non-interactive init requires a valid --email.');
+      expect(constructed).toEqual([]);
+      expect(upsertOrgMock).not.toHaveBeenCalled();
+    }
+  );
+
+  it('derives the default base URL only from the first domain label', async () => {
+    await runInit({ email: 'me@Acme-Corp.example.com' });
+    expect(upsertOrgMock).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'Acme-Corp', baseUrl: 'https://Acme-Corp.atlassian.net' })
+    );
+  });
+});
+
+describe('runInit (interactive validators)', () => {
+  type Validator = (value: string | undefined) => string | undefined;
+
+  const validatorFor = (fragment: string): Validator => {
+    const call = textMock.mock.calls.find(([opts]) => String(opts.message).includes(fragment));
+    if (!call) throw new Error(`No text prompt containing "${fragment}"`);
+    return call[0].validate;
+  };
+
+  const runWizardUntilToken = async () => {
+    selectMock.mockResolvedValue('__new__');
+    textMock
+      .mockResolvedValueOnce('acme')
+      .mockResolvedValueOnce('https://acme.atlassian.net')
+      .mockResolvedValueOnce('me@acme.com')
+      .mockResolvedValueOnce('5')
+      .mockResolvedValueOnce('10');
+    confirmMock.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    passwordMock.mockResolvedValueOnce(cancelled());
+    await expect(runInit()).rejects.toThrow('exit:0');
+  };
+
+  it('rejects http, credentials and non-URLs in the base URL prompt', async () => {
+    await runWizardUntilToken();
+    const validate = validatorFor('Jira base URL');
+    expect(validate('https://acme.atlassian.net')).toBeUndefined();
+    expect(validate('')).toBe('Required');
+    expect(validate('http://acme.atlassian.net')).toMatch(/^Base URL must use https:\/\//);
+    expect(validate('https://me:pw@acme.atlassian.net')).toBe('Base URL must not contain credentials');
+    expect(validate('acme.atlassian.net')).toBe('Base URL is not a valid URL');
+  });
+
+  it('rejects a malformed email in the email prompt', async () => {
+    await runWizardUntilToken();
+    const validate = validatorFor('Jira account email');
+    expect(validate('me@acme.com')).toBeUndefined();
+    expect(validate('me@acme')).toBe('Looks invalid');
+  });
+
+  it('bounds the FPS and max-frames prompts, allowing an empty answer for the default', async () => {
+    await runWizardUntilToken();
+    const fps = validatorFor('Frame extraction FPS');
+    const maxFrames = validatorFor('Max frames kept per video');
+    expect(fps('')).toBeUndefined();
+    expect(fps('30')).toBeUndefined();
+    expect(fps('31')).toBe('"31" is not a whole number from 1 to 30');
+    expect(fps('0')).toBeDefined();
+    expect(maxFrames('200')).toBeUndefined();
+    expect(maxFrames('201')).toBe('"201" is not a whole number from 1 to 200');
+  });
 });
 
 describe('runInit (flags in a terminal) — issue #28', () => {

@@ -1,3 +1,5 @@
+import { assignAttachmentFilenames, sanitizeAttachmentFilename } from './safePath.js';
+
 export type JiraADFContent = {
   type: string;
   content?: JiraADFContent[];
@@ -38,6 +40,38 @@ const isAdfMark = (value: unknown): value is JiraADFMark => hasStringType(value)
 const childNodesOf = (node: { content?: unknown }) =>
   Array.isArray(node.content) ? node.content.filter(isAdfNode) : undefined;
 
+const MIN_FENCE_LENGTH = 3;
+const SAFE_CODE_LANGUAGE = /^[A-Za-z0-9_+#.-]{1,32}$/;
+const HEADING_LEVEL = { min: 1, max: 6 } as const;
+const UNSAFE_MEDIA_ID_CHARS = /[^A-Za-z0-9_-]/g;
+
+const longestBacktickRun = (text: string) =>
+  (text.match(/`+/g) ?? []).reduce((longest, run) => Math.max(longest, run.length), 0);
+
+const codeFence = (body: string) =>
+  '`'.repeat(Math.max(MIN_FENCE_LENGTH, longestBacktickRun(body) + 1));
+
+const safeCodeLanguage = (language: unknown) =>
+  typeof language === 'string' && SAFE_CODE_LANGUAGE.test(language) ? language : '';
+
+const clampHeadingLevel = (level: unknown) => {
+  if (typeof level !== 'number' || !Number.isFinite(level)) return HEADING_LEVEL.min;
+  return Math.min(HEADING_LEVEL.max, Math.max(HEADING_LEVEL.min, Math.trunc(level)));
+};
+
+const safeMediaId = (id: unknown) =>
+  typeof id === 'string' ? id.replace(UNSAFE_MEDIA_ID_CHARS, '') : '';
+
+function firstSavedNameByFilename(
+  attachments: ReadonlyArray<{ filename: string; savedName: string }>
+): Map<string, string> {
+  const byFilename = new Map<string, string>();
+  for (const att of attachments) {
+    if (!byFilename.has(att.filename)) byFilename.set(att.filename, att.savedName);
+  }
+  return byFilename;
+}
+
 /**
  * Converts a Jira ADF document to Markdown.
  *
@@ -56,16 +90,21 @@ export function convertADFToMarkdown(
 
   const topLevelNodes = childNodesOf(content) ?? [];
 
-  const filenameSet = new Set(attachments.map((att) => att.filename));
+  const savedNames = assignAttachmentFilenames(attachments);
+  const savedAttachments = attachments.map((att, index) => ({
+    ...att,
+    savedName: savedNames[index],
+  }));
+  const savedNameByFilename = firstSavedNameByFilename(savedAttachments);
   const altMatchedFilenames = new Set<string>();
   const collectAltMatches = (node: JiraADFContent) => {
     if ((node.type === 'media' || node.type === 'mediaInline') && node.attrs?.alt) {
-      if (filenameSet.has(node.attrs.alt)) altMatchedFilenames.add(node.attrs.alt);
+      if (savedNameByFilename.has(node.attrs.alt)) altMatchedFilenames.add(node.attrs.alt);
     }
     childNodesOf(node)?.forEach(collectAltMatches);
   };
   topLevelNodes.forEach(collectAltMatches);
-  const unmatchedAttachments = attachments.filter(
+  const unmatchedAttachments = savedAttachments.filter(
     (att) => !altMatchedFilenames.has(att.filename)
   );
 
@@ -106,13 +145,12 @@ export function convertADFToMarkdown(
 
     if ((node.type === 'media' || node.type === 'mediaInline') && node.attrs) {
       const filename = node.attrs.alt;
-      if (filename && filenameSet.has(filename)) return formatMediaLink(filename);
-      if (unmatchedAttachments.length > 0) {
-        const att = unmatchedAttachments.shift()!;
-        return formatMediaLink(att.filename);
-      }
-      if (filename) return formatMediaLink(filename);
-      const mediaId = node.attrs.id;
+      const matchedName = filename ? savedNameByFilename.get(filename) : undefined;
+      if (matchedName) return formatMediaLink(matchedName);
+      const nextUnmatched = unmatchedAttachments.shift();
+      if (nextUnmatched) return formatMediaLink(nextUnmatched.savedName);
+      if (filename) return formatMediaLink(sanitizeAttachmentFilename(filename, node.attrs.id));
+      const mediaId = safeMediaId(node.attrs.id);
       return mediaId ? `![embedded media](media/${mediaId})` : '![embedded media]()';
     }
 
@@ -125,8 +163,8 @@ export function convertADFToMarkdown(
     }
 
     if ((node.type === 'inlineCard' || node.type === 'blockCard') && node.attrs?.url) {
-      const matched = attachments.find((att) => att.url && node.attrs!.url!.includes(att.id));
-      if (matched) return `[${matched.filename}](attachments/${matched.filename})`;
+      const matched = savedAttachments.find((att) => att.url && node.attrs!.url!.includes(att.id));
+      if (matched) return `[${matched.savedName}](attachments/${matched.savedName})`;
       return node.attrs.url;
     }
 
@@ -136,15 +174,16 @@ export function convertADFToMarkdown(
     if (node.text) return applyMarks(node.text, node.marks);
 
     if (node.type === 'heading' && children) {
-      const level = node.attrs?.level ?? 1;
+      const level = clampHeadingLevel(node.attrs?.level);
       const childContent = children.map((child) => extractText(child)).join('');
       return '#'.repeat(level) + ' ' + childContent;
     }
 
     if (node.type === 'codeBlock') {
-      const lang = node.attrs?.language ?? '';
+      const lang = safeCodeLanguage(node.attrs?.language);
       const childContent = children?.map((child) => extractText(child)).join('') ?? '';
-      return '```' + lang + '\n' + childContent + '\n```';
+      const fence = codeFence(childContent);
+      return fence + lang + '\n' + childContent + '\n' + fence;
     }
 
     if (node.type === 'blockquote' && children) {

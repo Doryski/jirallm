@@ -1,5 +1,41 @@
 import { describe, expect, it } from 'vitest';
-import { parseIssueKey, parseIssueKeyArgs } from './issueKey.js';
+import { isIssueKey, isNumericId, parseIssueKey, parseIssueKeyArgs, parseNumericId } from './issueKey.js';
+
+describe('parseNumericId / isNumericId', () => {
+  it('returns a digits-only id unchanged', () => {
+    expect(parseNumericId('10042', 'link id')).toBe('10042');
+    expect(isNumericId('10042')).toBe(true);
+  });
+
+  it.each([
+    ['../issue/PROJ-9?deleteSubtasks=true'],
+    ['10042?x=1'],
+    ['10042#frag'],
+    ['10%2F42'],
+    ['-1'],
+    ['1.5'],
+    [' 1'],
+    [''],
+    ['PROJ-1'],
+  ])('rejects %j naming the value and the expected shape', (value) => {
+    expect(isNumericId(value)).toBe(false);
+    expect(() => parseNumericId(value, 'comment id')).toThrow(
+      `Invalid comment id "${value}". Expected a numeric id (digits only, e.g. 10042).`
+    );
+  });
+});
+
+describe('isIssueKey', () => {
+  it('accepts plain and org-prefixed keys', () => {
+    expect(isIssueKey('PROJ-1')).toBe(true);
+    expect(isIssueKey('acme/proj-1')).toBe(true);
+  });
+
+  it('rejects ids and path-shaped input', () => {
+    expect(isIssueKey('10042')).toBe(false);
+    expect(isIssueKey('../issue/PROJ-9')).toBe(false);
+  });
+});
 
 describe('parseIssueKey', () => {
   it('parses a bare issue key', () => {

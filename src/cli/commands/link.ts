@@ -4,7 +4,7 @@ import {
   type IssueLinkSummary,
   type JiraIssueLinkType,
 } from '../../lib/jiraClient.js';
-import { parseIssueKey } from '../issueKey.js';
+import { isIssueKey, parseIssueKey, parseNumericId } from '../issueKey.js';
 import { resolveOrg } from '../resolveOrg.js';
 import { printJson, shouldOutputJson } from '../jsonOutput.js';
 
@@ -85,15 +85,6 @@ export type LinkRemoveOptions = {
 };
 
 type LinkRecord = IssueLinkSummary & { id?: string };
-
-function looksLikeIssueKey(input: string): boolean {
-  try {
-    parseIssueKey(input);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 async function removeByLinkId(opts: LinkRemoveOptions): Promise<void> {
   if (opts.dryRun) {
@@ -179,9 +170,9 @@ async function removeByIssueKey(opts: LinkRemoveOptions): Promise<void> {
 }
 
 export async function runLinkRemove(opts: LinkRemoveOptions): Promise<void> {
-  if (looksLikeIssueKey(opts.linkId)) {
+  if (isIssueKey(opts.linkId)) {
     await removeByIssueKey(opts);
     return;
   }
-  await removeByLinkId(opts);
+  await removeByLinkId({ ...opts, linkId: parseNumericId(opts.linkId, 'link id') });
 }
