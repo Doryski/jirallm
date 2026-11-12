@@ -58,10 +58,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `--fps` must be a whole number from 1 to 30 and `--max-frames` from 1 to 200. Values of
   `video_frames.fps` / `video_frames.max_frames` already saved in config are rounded and clamped
   into the same ranges instead of being rejected, so an older config keeps loading.
-- Frame extraction is skipped, with a warning, for videos longer than 30 minutes or with an
-  unreadable duration (the video file is still exported), and stale `frame-*` / `raw-*` files in
-  a video's frames folder are removed before extraction. The check relies on the duration the file
-  declares; hard caps inside ffmpeg arrive with the next `framewise` release. `JiraExporter` accepts `videoFrames.maxDurationSeconds` to change the cap.
+- Frame extraction is bounded: `framewise` is bumped to `^0.2.0`, which stops ffmpeg after 30
+  minutes of video or 3000 raw frames, kills runs that exceed its timeout and ships `sharp` 0.35.5
+  (fixing its high-severity advisories). Videos that declare more than 30 minutes are skipped with
+  a warning (the video file is still exported), and stale `frame-*` / `raw-*` files in a video's
+  frames folder are removed before extraction. `JiraExporter` accepts `videoFrames.maxDurationSeconds` to change the cap.
 - `init` validates the email address properly before deriving a default base URL from it.
 
 ### Changed

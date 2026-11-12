@@ -485,21 +485,19 @@ describe('JiraExporter video frame extraction', () => {
     warn.mockRestore();
   });
 
-  it('skips extraction when the probe cannot determine the duration', async () => {
+  it('still extracts when the probe cannot determine the duration', async () => {
     vi.mocked(isVideoFile).mockReturnValue(true);
     vi.mocked(readVideoDuration).mockResolvedValue({ status: 'unknown' });
+    vi.mocked(extractFrames).mockRejectedValue(new Error('stop after the call'));
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     const exporter = makeVideoExporter(VIDEO_TASK);
-    const outcome = await exporter.exportIssue('PROJ-1', {
+    await exporter.exportIssue('PROJ-1', {
       outputDir: tmpDir,
       videoFrames: { enabled: true },
     });
 
-    expect(vi.mocked(extractFrames)).not.toHaveBeenCalled();
-    expect(outcome.videos[0].error).toBe(
-      'Frame extraction skipped: video duration could not be determined'
-    );
+    expect(vi.mocked(extractFrames)).toHaveBeenCalledTimes(1);
     warn.mockRestore();
   });
 

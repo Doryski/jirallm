@@ -343,8 +343,7 @@ function buildTaskMarkdown(task: JiraTaskData, ctx: RenderContext): string {
 }
 
 function durationSkipReason(probe: VideoDurationProbe, maxSeconds: number): string | undefined {
-  if (probe.status === 'unavailable') return undefined;
-  if (probe.status === 'unknown') return 'video duration could not be determined';
+  if (probe.status !== 'known') return undefined;
   if (probe.seconds <= maxSeconds) return undefined;
   return `video duration ${Math.round(probe.seconds)}s exceeds the ${maxSeconds}s limit`;
 }

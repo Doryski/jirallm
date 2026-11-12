@@ -68,7 +68,7 @@
   },
   "homepage": "https://github.com/Doryski/jirallm#readme",
   "engines": {
-    "node": ">=20"
+    "node": ">=20.9.0"
   },
   "os": [
     "darwin",
@@ -88,7 +88,7 @@
     "@iarna/toml": "^2.2.5",
     "@napi-rs/keyring": "^1.3.0",
     "commander": "^14.0.3",
-    "framewise": "^0.1.0",
+    "framewise": "^0.2.0",
     "update-notifier": "^7.3.1",
     "zod": "^4.6.7"
   },
