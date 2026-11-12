@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-11-12
+
 ### Removed
 
 - **Breaking:** the export flag `--api-token <token>` is gone — a token in argv is visible in `ps`,
@@ -531,6 +533,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   except macOS without Homebrew, where it defaults to no (since setup may
   cascade into a long Homebrew + Xcode CLT install).
 
+[0.16.0]: https://github.com/doryski/jirallm/releases/tag/v0.16.0
 [0.15.0]: https://github.com/doryski/jirallm/releases/tag/v0.15.0
 [0.14.0]: https://github.com/doryski/jirallm/releases/tag/v0.14.0
 [0.13.1]: https://github.com/doryski/jirallm/releases/tag/v0.13.1
